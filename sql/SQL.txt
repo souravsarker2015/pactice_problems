@@ -11,5 +11,23 @@ from worker as w
                     on w.worker_id = t.worker_ref_id
                         and t.worker_title = "manager"
 
-26
+35
+select worker_id, salary
+from worker as w1
+where 4 = (select count(distinct salary)
+           from worker as w2
+            where w1.salary<=w2.salary)
 
+36
+44
+select * from (select * from worker order by worker_id desc limit 5) as w1
+order by w1.worker_id
+
+45
+select w.first_name, w.last_name, w.department, w.salary
+from (select max(salary) as total, department
+      from worker
+      group by department) as new
+         inner join worker as w
+                    on w.department = new.department
+                        and w.salary=new.total
