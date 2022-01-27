@@ -1,0 +1,15 @@
+24
+select department, count(department) as total
+from worker
+group by department
+order by total desc
+
+25
+select w.first_name, w.department,t.worker_title
+from worker as w
+         inner join title as t
+                    on w.worker_id = t.worker_ref_id
+                        and t.worker_title = "manager"
+
+26
+
