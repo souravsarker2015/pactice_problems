@@ -16,7 +16,8 @@ class Bubble_Sort:
 
 if __name__ == "__main__":
     # ele = [2, 5, 7, 1, 9, 17, 6]
-    ele = ['tuhin', 'hafiz', 'tito', 'anu']
+    ele = [1, 2, 3]
+    # ele = ['tuhin', 'hafiz', 'tito', 'anu']
     b = Bubble_Sort(ele)
     b.bubble_sort()
     print(ele)
