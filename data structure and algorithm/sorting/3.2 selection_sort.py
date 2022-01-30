@@ -6,7 +6,7 @@ class SelectionSort:
         length = len(self.data)
         for i in range(length - 1):
             min = i
-            for j in range(min + 1, length):
+            for j in range(i+1, length):
                 if self.data[j] < self.data[min]:
                     min = j
 
