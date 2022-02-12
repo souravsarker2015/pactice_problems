@@ -27,6 +27,6 @@
 #     print(f"{n} is palindrome")
 # else:
 #     print(f"{n} is not palindrome")
-n=['i','am','sourov']
-for i in n:
-    print(i)
+# n=['i','am','sourov']
+# for i in n:
+#     print(i)

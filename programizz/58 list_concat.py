@@ -6,10 +6,17 @@
 
 n1 = 'This a laptop'
 n2 = n1.split()
-temp=[]
+temp = []
 for i in n2:
     temp.append(i[::-1])
 
 print(temp)
 print(" ".join(temp))
 print(" ".join(list(reversed(temp))))
+
+# n1 = 'This a laptop'
+# n1 = n1.split()
+# print(list(reversed(n1)))
+#
+# for i in range(len(n1) - 1, -1, -1):
+#     print(n1[i])

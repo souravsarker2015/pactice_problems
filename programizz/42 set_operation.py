@@ -3,5 +3,5 @@ f = {1, 3, 3, 8, 9, 15}
 
 print(f"Union of {e} and {f} = {e | f}")
 print(f"Intersection of {e} and {f} = {e & f}")
-print(f"Difference of {e} and {f} = {f - e}")
+print(f"Difference of {e} and {f} = {e-f}")
 print(f"and or symmetric Difference of {e} and {f} = {e ^ f}")
