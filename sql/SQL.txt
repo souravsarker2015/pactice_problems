@@ -31,3 +31,4 @@ from (select max(salary) as total, department
          inner join worker as w
                     on w.department = new.department
                         and w.salary=new.total
+
