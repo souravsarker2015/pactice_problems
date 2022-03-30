@@ -56,6 +56,50 @@ select replace(first_name,'a','A') from worker
 select * from worker
 where first_name='vipul' or first_name= 'satish';
 
+# select * from worker
+# where department="admin";
+
+# select * from worker
+# where department in ('hr','admin');
+#
+# select * from worker
+# where first_name like '%a';
+# select * from worker
+# where first_name like '%a%'
+
+select * from worker
+where first_name like '%a';
+
+
+# select first_name from worker
+# where first_name like '%h' and length(first_name)=6;
+
+select first_name from worker
+where first_name like '_____h'
+
+
+# select * from worker
+# where salary between 100000 and 500000
+# order by salary desc ;
+
+# select * from worker
+# where year(joining_date)=2014 and month(joining_date)=2;
+
+
+# select count(department) from worker
+# where department='admin'
+
+select count(worker_id) from worker
+where department ='admin';
+
+
+
+
+
+
+
+
+
 
 
 
