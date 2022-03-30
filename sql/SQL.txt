@@ -127,6 +127,15 @@ group by worker_title,affected_from
 having d>1;
 
 
+Intersection:(INTERSECT is getting error in mysql)
+
+# select distinct (worker_ref_id) from title
+# inner join bonus using (worker_ref_id)
+
+
+select distinct (worker_ref_id) from title
+where worker_ref_id in(select worker_ref_id from bonus)
+
 
 
 
