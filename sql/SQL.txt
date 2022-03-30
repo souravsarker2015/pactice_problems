@@ -103,6 +103,20 @@ order by salary;
 
 
 important problems:
+max_salary from each department:
+
+select concat(w.first_name, ' ', w.last_name) as Name, w.department, w.salary
+from worker as w
+         inner join
+     (select max(salary) as total, department
+      from worker
+      group by department) as new
+     on w.department = new.department and
+        w.salary = new.total
+order by w.salary desc
+
+
+
 Q-24. Write an SQL query to print details of the Workers who are also Managers.
 
 select w.first_name,w.department,w.salary,
@@ -128,6 +142,8 @@ having d>1;
 
 
 top salary:
+select first_name,salary from worker
+where salary in (select max(salary) from worker)
 
 select salary
 from worker as w1
@@ -144,6 +160,33 @@ where w1.salary = w2.salary
   and w1.worker_id !=w2.worker_id
 
 
+# select first_name,salary from worker as w1
+# where (select count(distinct (salary)) from worker as w2
+#     where w1.salary <=w2.salary)<=3
+
+# select first_name,salary from worker
+# order by salary desc limit 3
+
+(select first_name,salary from worker
+order by salary asc limit 3)
+order by salary
+
+# select first_name,salary from worker as w1
+# where (select count(distinct salary) from worker as w2
+#     where w1.salary >=w2.salary)<=3
+# order by w1.salary
+
+second highest salary:
+
+select salary from worker w1
+where (select count(distinct (salary)) from worker w2
+    where w1.salary<=w2.salary)=2
+
+
+last 5 records:
+(select * from worker
+order by worker_id desc limit 5)
+order by worker_id
 
 
 Intersection:(INTERSECT is getting error in mysql)
