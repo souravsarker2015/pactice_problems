@@ -7,7 +7,8 @@
 #             if arr[i] == arr[j] and arr[i] not in temp:
 #                 temp.append(arr[i])
 #     return temp
-#
+
+
 # # TC= O(N^2)
 # arr = [11, 11, 1, 23, 5, 6, 45, 6, 5, 5, 4, 5]
 # print(duplicate(arr))

@@ -127,6 +127,16 @@ group by worker_title,affected_from
 having d>1;
 
 
+top salary:
+
+select salary
+from worker as w1
+where (select count(distinct (salary)) from worker as w2 where
+    w1.salary<=w2.salary)<=4
+order by salary desc ;
+
+
+
 Intersection:(INTERSECT is getting error in mysql)
 
 # select distinct (worker_ref_id) from title
