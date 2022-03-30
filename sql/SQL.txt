@@ -92,6 +92,42 @@ where first_name like '_____h'
 select count(worker_id) from worker
 where department ='admin';
 
+select worker_id,concat(first_name,' ',last_name) as Name,salary
+from worker
+where salary>=50000 and  salary <=100000
+order by salary;
+
+# select department,count(worker_id) as number_of_worker from worker
+# group by department
+# order by number_of_worker desc ;
+
+
+important problems:
+Q-24. Write an SQL query to print details of the Workers who are also Managers.
+
+select w.first_name,w.department,w.salary,
+       t.worker_title
+from worker as w inner join
+    title as t on
+        w.worker_id = t.worker_ref_id and
+        t.worker_title='manager';
+
+
+select w.first_name,w.department,t.worker_title,b.bonus_amount
+from worker as w
+    inner join title t
+    inner join bonus as b on
+        w.worker_id = b.worker_ref_id=t.worker_ref_id
+        and
+           t.worker_title in ('manager') and
+        b.bonus_amount=5000;
+
+select worker_title,affected_from,count(*) as d from title
+group by worker_title,affected_from
+having d>1;
+
+
+
 
 
 
