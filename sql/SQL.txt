@@ -136,7 +136,14 @@ Intersection:(INTERSECT is getting error in mysql)
 select distinct (worker_ref_id) from title
 where worker_ref_id in(select worker_ref_id from bonus)
 
+MINUS:
+# select distinct (worker_ref_id) from title
+# left join bonus using (worker_ref_id)
+# where bonus.worker_ref_id is null
 
+
+# select distinct (worker_ref_id) from title
+# where worker_ref_id in(select worker_ref_id from bonus)
 
 
 
