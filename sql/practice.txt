@@ -250,3 +250,44 @@ where (select count(distinct salary) from worker as w2
 # and w1.salary=w2.salary
 
 
+
+
+
+#
+# select max(salary) from worker
+# where salary not in (select max(salary) from worker)
+
+# select max(salary)
+# from worker
+# where salary < (select max(salary) from worker
+#                 where salary not in (select max(salary) from worker
+#                     where salary not in (select max(salary) from worker)));
+
+# select salary from worker
+# order by salary desc limit 2,1
+
+# select department,count(worker_id) as t from worker
+# group by department
+
+# select * from worker
+# where worker_id>(select count(*) from worker)-5
+
+# select max(salary),department from worker
+# group by department
+
+
+# select w1.first_name,w1.department,w1.salary from worker as w1
+# inner join (select max(salary) as t,department from worker
+#     group by department ) as new on new.t=w1.salary and new.department=w1.department
+
+# select w1.first_name,w1.salary,w1.department from worker as w1
+# where (select count(distinct salary) from worker as w2
+#     where w1.salary<=w2.salary)<=3
+# order by w1.salary
+
+# select department, sum(salary) from worker
+# group by department
+
+# select * from worker
+# where salary in (select max(salary) from worker)
+
