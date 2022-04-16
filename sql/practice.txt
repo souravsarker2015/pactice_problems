@@ -208,5 +208,45 @@ select w1.* from worker as w1
 where (select count(distinct salary) from worker as w2
     where w1.salary <=w2.salary) <=2 order by w1.salary desc
 
+# select distinct worker_ref_id from title
+# inner join bonus using (worker_ref_id)
+
+# select distinct worker_ref_id from title
+# where worker_ref_id in (select worker_ref_id from bonus)
+
+
+# select distinct worker_ref_id from title
+# where worker_ref_id not in (select worker_ref_id from bonus)
+
+# select distinct worker_ref_id from title
+# left join bonus using(worker_ref_id)
+# where bonus.worker_ref_id is null
+
+
+# select * from worker
+# order by salary asc limit 10
+
+# select * from worker
+# order by salary desc limit 4,1
+
+# select * from worker as w1
+# where (select count(distinct salary) from worker as w2
+#     where w1.salary<=w2.salary)<=4
+
+
+# select w1.first_name,w1.salary from worker as w1
+# inner join worker as w2 on w1.worker_id!=w2.worker_id
+# and w1.salary=w2.salary
+
+# (select first_name, salary, department,t.worker_title
+# from worker as w1
+#          inner join title as t
+#                     on w1.worker_id = t.worker_ref_id)
+
+# select w1.first_name,w1.salary,w1.department,
+# from worker as w1
+# inner join worker as w2
+#     on w1.worker_id!=w2.worker_id
+# and w1.salary=w2.salary
 
 
