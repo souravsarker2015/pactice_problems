@@ -748,3 +748,5 @@ Q-50. Write an SQL query to fetch the names of workers who earn the highest sala
 The required query is:
 
 SELECT FIRST_NAME, SALARY from Worker WHERE SALARY=(SELECT max(SALARY) from Worker);
+
+

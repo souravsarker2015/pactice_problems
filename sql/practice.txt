@@ -1,0 +1,32 @@
+# select * from worker
+# where first_name in ('vipul','satish')
+
+# select * from worker
+# where first_name not in ('vipul','satish')
+
+# select * from worker
+# where department in ('admin')
+
+# select * from worker
+# where first_name like "%a%"
+
+select * from worker
+where first_name like '%h' and length(first_name)=6
+
+
+# select * from worker
+# where salary between 100000 and 500000
+
+
+# select * from worker
+# where year(joining_date)=2014 and month(joining_date)=2
+
+# select department,count(worker_id) as no_workers from worker
+# group by department
+
+# select first_name,salary from worker
+# where salary>=50000 and salary<=100000
+
+select department,count(worker_id) as no_worker from worker
+group by department
+order by no_worker desc
