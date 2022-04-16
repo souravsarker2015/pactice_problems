@@ -30,3 +30,33 @@ where first_name like '%h' and length(first_name)=6
 select department,count(worker_id) as no_worker from worker
 group by department
 order by no_worker desc
+
+
+rst_name,w.salary,w.department,t.worker_title from worker as w
+# inner join title as t
+# on w.worker_id=t.worker_ref_id
+# and t.worker_title='Manager'
+
+
+# select w.first_name,w.salary,w.department,t.worker_title from worker as w
+# inner join title as t
+# on w.worker_id=t.worker_ref_id
+# and t.worker_title='Manager'
+
+# select worker_ref_id,worker_title,affected_from ,count(*) as t from title
+# group by worker_title,affected_from
+# having t>1
+
+# select * from worker
+# where worker_id%2!=0
+
+
+# select * from title
+# inner join worker
+#
+# select distinct worker_ref_id from title
+# where worker_ref_id in (select worker_ref_id from bonus)
+
+
+# select distinct worker_ref_id from title
+# inner join bonus using (worker_ref_id)

@@ -281,3 +281,6 @@ on w1.salary=w2.salary and w1.worker_id != w2.worker_id;
 
 
 
+
+
+
