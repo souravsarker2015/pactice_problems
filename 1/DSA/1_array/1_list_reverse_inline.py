@@ -14,5 +14,12 @@ for i in range(math.ceil(check_time)):
         data[startIndex], data[endIndex] = data[endIndex], data[startIndex]
         startIndex += 1
         endIndex -= 1
+# or
+# while endIndex > startIndex:
+#     data[startIndex], data[endIndex] = data[endIndex], data[startIndex]
+#     startIndex += 1
+#     endIndex -= 1
 
 print(data)
+
+
