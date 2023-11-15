@@ -21,7 +21,6 @@ class LinkedList:
 
     def insert_end(self, data):
         self.no_of_nodes += 1
-
         actual_node = self.head
         new_node = Node(data)
         while actual_node.next_node is not None:
