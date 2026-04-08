@@ -4743,3 +4743,405 @@ class DocumentDownloadView(APIView):
 - **Design Patterns**
 
 কোনটা নিয়ে আগাবে?
+
+এই পাঁচটা topic একসাথে cover করছি — same style-এ, banking context দিয়ে।
+
+---
+
+## ১. Large Data Handle কীভাবে করো
+
+### 🔑 এক কথায়:
+> Large data মানে একসাথে সব RAM-এ তুলো না — **chunk করে** বা **stream করে** process করো।
+
+**তিনটা main technique:**
+
+```python
+# ❌ Wrong — সব একসাথে memory-তে
+users = User.objects.all()  # 10 লাখ row → RAM শেষ 💀
+
+# ✅ Method 1 — iterator() — chunk-by-chunk fetch
+for user in User.objects.filter(active=True).iterator(chunk_size=1000):
+    send_sms(user.phone)
+    # প্রতি 1000 জন করে আসে, পুরানোটা memory থেকে যায়
+
+# ✅ Method 2 — values_list() — শুধু দরকারি field
+phones = User.objects.values_list('phone', flat=True).iterator()
+# পুরো object না, শুধু phone number
+
+# ✅ Method 3 — Pagination (API response-এর জন্য)
+from django.core.paginator import Paginator
+
+queryset = Transaction.objects.filter(branch="Gulshan").order_by('-created_at')
+paginator = Paginator(queryset, 100)  # page-এ 100টা
+
+page = paginator.get_page(request.GET.get('page', 1))
+```
+
+**Generator দিয়ে CSV export (লাখ row):**
+```python
+def export_transactions_csv(start_date, end_date):
+    """Stream করে CSV generate — memory safe"""
+    def row_generator():
+        yield "txn_id,amount,status,date\n"  # header
+
+        qs = Transaction.objects.filter(
+            date__range=[start_date, end_date]
+        ).values('txn_id', 'amount', 'status', 'date').iterator(chunk_size=500)
+
+        for txn in qs:
+            yield f"{txn['txn_id']},{txn['amount']},{txn['status']},{txn['date']}\n"
+
+    # Django StreamingHttpResponse দিয়ে পাঠাও
+    from django.http import StreamingHttpResponse
+    response = StreamingHttpResponse(row_generator(), content_type='text/csv')
+    response['Content-Disposition'] = 'attachment; filename="transactions.csv"'
+    return response
+```
+
+**Interview tip:**
+```
+Large data → আমি সবসময় জিজ্ঞেস করি:
+১. কত row? (হাজার? লাখ? কোটি?)
+২. Real-time দরকার? নাকি batch চলবে?
+৩. RAM কত?
+
+তারপর decide করি: iterator / pagination / celery batch
+```
+
+---
+
+## ২. Bulk Insert / Update
+
+### 🔑 এক কথায়:
+> একটা করে INSERT না দিয়ে **একবারে সব** পাঠাও — DB-র সাথে round trip কমাও।
+
+```python
+# ❌ Worst — প্রতিটার জন্য আলাদা query (N queries)
+for data in transaction_list:
+    Transaction.objects.create(**data)
+# 1000 transaction = 1000 INSERT query 😭
+
+# ✅ bulk_create — একটাই INSERT query
+transactions = [
+    Transaction(
+        account_id=d['account_id'],
+        amount=d['amount'],
+        txn_type=d['type']
+    )
+    for d in transaction_list
+]
+Transaction.objects.bulk_create(transactions, batch_size=500)
+# 1000 transaction = 2 INSERT query ✅ (500 + 500)
+```
+
+**bulk_update — একসাথে update:**
+```python
+# Scenario: রাত ১২টায় সব account-এর daily_limit reset
+accounts = Account.objects.filter(status='active')
+
+for account in accounts:
+    account.daily_limit = account.account_type.default_limit
+    account.last_reset = today
+
+Account.objects.bulk_update(
+    accounts,
+    fields=['daily_limit', 'last_reset'],
+    batch_size=1000
+)
+```
+
+**Upsert — insert না থাকলে, update থাকলে:**
+```python
+from django.db.models import Q
+
+Transaction.objects.bulk_create(
+    transactions,
+    update_conflicts=True,                    # conflict হলে update করো
+    unique_fields=['txn_reference'],          # কোনটা unique?
+    update_fields=['status', 'updated_at'],   # কোন field update?
+    batch_size=500
+)
+```
+
+**Performance comparison:**
+```
+১০,০০০ record insert:
+
+Loop create():     ~45 seconds  😫
+bulk_create():     ~0.8 seconds ✅ (56x faster!)
+
+কারণ:
+- Loop: 10,000 network round trips
+- Bulk: 20 round trips (batch_size=500)
+```
+
+---
+
+## ৩. Celery কী?
+
+### 🔑 এক কথায়:
+> Celery হলো Python-এর **task queue** — ভারী কাজ background-এ পাঠিয়ে দাও, user-কে আটকিও না।
+
+**Simple analogy:**
+```
+রেস্তোরাঁয় order করলে:
+- Waiter (Django view) order নেয় → রান্নাঘরে (Celery) পাঠায়
+- Waiter তোমাকে বলে "হচ্ছে!" → চলে যায়
+- রান্না হলে তোমার কাছে আসে
+
+তুমি দাঁড়িয়ে থাকো না ✅
+```
+
+**Setup:**
+```python
+# celery.py
+from celery import Celery
+
+app = Celery('ucb_app')
+app.config_from_object('django.conf:settings', namespace='CELERY')
+app.autodiscover_tasks()
+
+# settings.py
+CELERY_BROKER_URL = 'redis://localhost:6379/0'   # Redis as broker
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+```
+
+**Task define করা:**
+```python
+# tasks.py
+from celery import shared_task
+
+@shared_task
+def send_transaction_alert(account_id, amount, txn_type):
+    """SMS/Email পাঠাও — background-এ"""
+    account = Account.objects.get(id=account_id)
+
+    message = f"UCB: {txn_type} Tk {amount} on {account.number}. Balance: Tk {account.balance}"
+    send_sms(account.phone, message)
+    send_email(account.email, message)
+
+    return f"Alert sent for account {account_id}"
+
+@shared_task
+def generate_monthly_statement(account_id, month, year):
+    """PDF generate করো — ৩০ সেকেন্ড লাগতে পারে"""
+    transactions = Transaction.objects.filter(
+        account_id=account_id,
+        date__month=month,
+        date__year=year
+    )
+    pdf = generate_pdf(transactions)
+    save_to_s3(pdf, f"statements/{account_id}/{year}-{month}.pdf")
+```
+
+**Task call করা:**
+```python
+# views.py
+def transfer_money(request):
+    # ১. Payment process করো (fast)
+    txn = process_transfer(request.data)
+
+    # ২. Alert background-এ পাঠাও (slow — user আটকাবে না)
+    send_transaction_alert.delay(
+        account_id=txn.account_id,
+        amount=txn.amount,
+        txn_type="DEBIT"
+    )
+
+    # ৩. User তৎক্ষণাৎ response পায়
+    return Response({"status": "Transfer successful", "txn_id": txn.id})
+    # SMS পরে যাবে — user জানে না, care করে না ✅
+```
+
+**Celery Worker run করা:**
+```bash
+celery -A ucb_app worker --loglevel=info --concurrency=4
+# ৪টা worker process একসাথে task handle করবে
+```
+
+---
+
+## ৪. Redis কেন Use করো
+
+### 🔑 এক কথায়:
+> Redis হলো **in-memory** key-value store — RAM-এ data রাখে, তাই অবিশ্বাস্য দ্রুত।
+
+```
+PostgreSQL query: ~10-50ms (disk read)
+Redis query:      ~0.1ms  (RAM read)
+→ Redis ৫০০x দ্রুত হতে পারে!
+```
+
+**Banking-এ Redis-এর ৫টা use:**
+
+**১. Cache — বারবার DB hit বাঁচাও:**
+```python
+from django.core.cache import cache
+
+def get_exchange_rate(currency):
+    """USD rate প্রতি ৫ মিনিটে একবার fetch করলেই যথেষ্ট"""
+    cache_key = f"exchange_rate:{currency}"
+    rate = cache.get(cache_key)
+
+    if not rate:
+        rate = fetch_from_central_bank_api(currency)  # slow external API
+        cache.set(cache_key, rate, timeout=300)        # ৫ মিনিট cache
+
+    return rate
+    # ১ম call: 500ms (API hit)
+    # পরের call: 0.1ms (Redis hit) ✅
+```
+
+**২. Session storage:**
+```python
+# settings.py
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+SESSION_CACHE_ALIAS = 'default'
+# DB-তে session লেখা লাগে না → login faster
+```
+
+**৩. Rate limiting — fraud prevention:**
+```python
+import redis
+r = redis.Redis(host='localhost', port=6379)
+
+def check_transaction_limit(account_id):
+    """একটা account ১ মিনিটে max ৫টা transaction করতে পারবে"""
+    key = f"txn_count:{account_id}"
+    count = r.incr(key)           # count বাড়াও
+    if count == 1:
+        r.expire(key, 60)         # ১ মিনিট পরে reset
+
+    if count > 5:
+        raise Exception("Rate limit exceeded — possible fraud!")
+    return True
+```
+
+**৪. Celery broker হিসেবে:**
+```python
+# Task queue Redis-এ store হয়
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+# Worker গুলো Redis থেকে task নেয়
+```
+
+**৫. Pub/Sub — real-time notification:**
+```python
+# Publisher (payment service)
+r.publish('transaction_alerts', json.dumps({
+    'account': 'SB-001',
+    'amount': 5000,
+    'type': 'CREDIT'
+}))
+
+# Subscriber (notification service)
+pubsub = r.pubsub()
+pubsub.subscribe('transaction_alerts')
+for message in pubsub.listen():
+    send_push_notification(message['data'])
+```
+
+---
+
+## ৫. Background Task Use Cases
+
+### 🔑 Banking-এ যে কাজগুলো background-এ পাঠাবে:
+
+**Rule of thumb:**
+```
+User কি এই কাজের result তৎক্ষণাৎ চায়?
+  হ্যাঁ → Synchronous (view-তেই করো)
+  না  → Background task (Celery-তে পাঠাও)
+```
+
+**Real examples:**
+
+```python
+# ১. Transaction notification
+@shared_task
+def notify_transaction(txn_id):
+    txn = Transaction.objects.get(id=txn_id)
+    send_sms(txn.account.phone, f"Tk {txn.amount} debited")
+    send_email(txn.account.email, render_email_template(txn))
+    # ২-৩ সেকেন্ড লাগে — user কে কেন আটকাবো?
+
+# ২. Monthly statement generate
+@shared_task
+def generate_statement(account_id, month):
+    transactions = Transaction.objects.filter(
+        account_id=account_id,
+        date__month=month
+    )
+    pdf_path = create_pdf_report(transactions)  # ১০-৩০ সেকেন্ড
+    email_pdf_to_customer(account_id, pdf_path)
+
+# ৩. Fraud detection (heavy ML model)
+@shared_task
+def run_fraud_check(txn_id):
+    txn = Transaction.objects.get(id=txn_id)
+    score = fraud_model.predict(txn.features)  # ML inference
+    if score > 0.8:
+        flag_transaction(txn_id)
+        alert_fraud_team(txn_id)
+
+# ৪. Batch reconciliation (রাত ১১টায়)
+@shared_task
+def daily_reconciliation():
+    """সারাদিনের সব transaction bank-এর সাথে মিলাও"""
+    transactions = Transaction.objects.filter(
+        date=today,
+        reconciled=False
+    )
+    for batch in chunked(transactions, 100):
+        reconcile_with_core_banking(batch)
+
+# ৫. Report generation
+@shared_task
+def generate_branch_report(branch_id, date_range):
+    data = Transaction.objects.filter(
+        branch_id=branch_id,
+        date__range=date_range
+    ).aggregate(
+        total=Sum('amount'),
+        count=Count('id')
+    )
+    save_report_to_database(branch_id, data)
+```
+
+**Celery Beat — Scheduled Tasks (cron-এর মতো):**
+```python
+# settings.py — কখন কোন task চলবে
+CELERY_BEAT_SCHEDULE = {
+    'daily-reconciliation': {
+        'task': 'tasks.daily_reconciliation',
+        'schedule': crontab(hour=23, minute=0),  # রাত ১১টায়
+    },
+    'exchange-rate-update': {
+        'task': 'tasks.update_exchange_rates',
+        'schedule': crontab(minute='*/5'),        # প্রতি ৫ মিনিটে
+    },
+    'fraud-report': {
+        'task': 'tasks.generate_fraud_report',
+        'schedule': crontab(hour=7, minute=0),    # সকাল ৭টায়
+    },
+}
+```
+
+------
+
+### 🎯 Interview-এ এই flow বলো:
+
+> *"Payment request আসলে Django view টা ২টা কাজ করে — প্রথমে core transaction টা process করে, তারপর notification/PDF/fraud-check গুলো Celery-র queue-তে `.delay()` দিয়ে পাঠিয়ে দেয়। User তৎক্ষণাৎ response পায়। Redis broker হিসেবে কাজ করে কারণ এটা in-memory — worker গুলো millisecond-এ task pick করতে পারে। Celery Beat দিয়ে রাতের reconciliation আর report generation schedule করা থাকে।"*
+
+---
+
+### 📊 Quick Summary
+
+| Topic | Core Idea | Key Tool |
+|---|---|---|
+| Large data | Chunk করে process করো | `iterator()`, `Paginator` |
+| Bulk insert | N queries → 1 query | `bulk_create()`, `bulk_update()` |
+| Celery | Background task queue | `@shared_task`, `.delay()` |
+| Redis | In-memory fast storage | Cache, broker, rate-limit |
+| Background tasks | User না আটকিয়ে heavy কাজ | Celery + Redis |
+
+পরের topic কোনটা? **Django REST Framework + JWT**, **OOP**, নাকি **Database Optimization**?
