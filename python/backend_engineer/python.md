@@ -6698,3 +6698,249 @@ class AccountFactory:
 * SOLID principles (must for backend)
 
 বললেই next level prep 🚀
+
+তোমার interview style maintain করে **Dependency Injection (DI)** নিচে cleanভাবে দিলাম 👇
+
+---
+
+# 🧠 Dependency Injection কী?
+
+---
+
+## 🔑 এক কথায়:
+
+> **Dependency Injection মানে — class নিজে dependency create না করে, বাইরে থেকে receive করে**
+
+---
+
+## 🧠 সহজভাবে:
+
+```text
+❌ "আমি নিজে DB বানাবো"
+✅ "তুমি আমাকে DB দাও, আমি use করবো"
+```
+
+👉 Control externalize করা হচ্ছে
+
+---
+
+# ❌ Problem (Without DI — Tight Coupling)
+
+```python
+class Database:
+    def connect(self):
+        return "DB connected"
+
+
+class UserService:
+    def __init__(self):
+        self.db = Database()   # ❌ hard dependency
+
+    def get_user(self):
+        return self.db.connect()
+```
+
+---
+
+### সমস্যা:
+
+```text
+❌ tightly coupled
+❌ testing কঠিন (mock করা যায় না)
+❌ change করলে code modify করতে হয়
+```
+
+---
+
+# ✅ Solution (With Dependency Injection)
+
+---
+
+## 💻 Constructor Injection (Most Common)
+
+```python
+class Database:
+    def connect(self):
+        return "DB connected"
+
+
+class UserService:
+    def __init__(self, db):   # ✅ injected
+        self.db = db
+
+    def get_user(self):
+        return self.db.connect()
+
+
+# Inject dependency
+db = Database()
+service = UserService(db)
+
+print(service.get_user())
+```
+
+---
+
+## 🧠 কী হলো এখানে:
+
+```text
+UserService → DB create করছে না
+External → DB create করে inject করছে
+```
+
+---
+
+# 🔄 Types of Dependency Injection
+
+---
+
+## ১. Constructor Injection ✅ (Best)
+
+```python
+service = UserService(db)
+```
+
+---
+
+## ২. Setter Injection
+
+```python
+class UserService:
+    def set_db(self, db):
+        self.db = db
+```
+
+---
+
+## ৩. Method Injection
+
+```python
+def process(db):
+    return db.connect()
+```
+
+---
+
+# 🧪 Testing-এ DI এর power 🔥
+
+---
+
+```python
+class MockDB:
+    def connect(self):
+        return "Mock DB"
+
+service = UserService(MockDB())
+
+print(service.get_user())   # test easily ✅
+```
+
+👉 Real DB লাগলো না
+
+---
+
+# 🏦 Real Banking Example
+
+```python
+class PaymentGateway:
+    def pay(self):
+        pass
+
+
+class BkashGateway(PaymentGateway):
+    def pay(self):
+        return "Paid via Bkash"
+
+
+class PaymentService:
+    def __init__(self, gateway):
+        self.gateway = gateway
+
+    def process(self):
+        return self.gateway.pay()
+
+
+# Inject different gateway
+service = PaymentService(BkashGateway())
+print(service.process())
+```
+
+👉 same service → different payment method ✅
+
+---
+
+# ⚖️ Without DI vs With DI
+
+| Without DI      | With DI         |
+| --------------- | --------------- |
+| tightly coupled | loosely coupled |
+| hard to test    | easy to test    |
+| less flexible   | highly flexible |
+
+---
+
+# 🚀 FastAPI-তে DI (🔥 Very Important)
+
+👉 FastAPI built-in DI support দেয়
+
+```python
+from fastapi import Depends, FastAPI
+
+app = FastAPI()
+
+def get_db():
+    return "DB connection"
+
+@app.get("/")
+def read_root(db = Depends(get_db)):   # DI এখানে হচ্ছে
+    return {"db": db}
+```
+
+---
+
+# 🧠 Core Idea
+
+```text
+Control Inversion (IoC)
+→ object নিজে dependency manage করে না
+→ external system manage করে
+```
+
+---
+
+# ⚠️ Common Mistake
+
+```python
+# ❌ DI use করেও ভিতরে create করা
+self.db = Database()
+```
+
+👉 এটা DI না 😄
+
+---
+
+# 🎯 Interview Closing Line
+
+> *"Dependency Injection helps in reducing tight coupling by providing dependencies from outside rather than creating them inside the class. It improves testability, flexibility, and maintainability. In frameworks like FastAPI, DI is built-in and widely used."*
+
+---
+
+## 🚀 Pro Tip (UCB interview killer)
+
+👉 যদি interviewer জিজ্ঞেস করে:
+**"Why DI is important?"**
+
+তুমি বলবে:
+
+> *"Because it makes the system loosely coupled, easier to test using mocks, and flexible to change implementations without modifying the core logic."*
+
+---
+
+চাও হলে next high-impact topics:
+
+* Strategy Pattern (🔥 very important)
+* SOLID principles (must)
+* Clean Architecture (backend killer topic)
+* Middleware (Django/FastAPI)
+
+বললেই next level prep 🚀
