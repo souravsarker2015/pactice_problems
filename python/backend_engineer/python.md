@@ -5935,3 +5935,269 @@ success_txns = [t for t in txns if t["status"] == "SUCCESS"]
 * Caching strategies (Redis)
 
 বললেই same style-এ দেব 🚀
+
+
+একই clean, interview-ready style-এ নিচে দিলাম 👇
+
+---
+
+# 🧠 Thread Safety কী?
+
+---
+
+## 🔑 এক কথায়:
+
+> **Thread-safe মানে — multiple thread একসাথে run করলেও data corrupt হবে না, result consistent থাকবে**
+
+---
+
+## 🧠 সহজভাবে:
+
+```
+একই resource (variable / data) অনেক thread use করছে
+→ কিন্তু কোনো conflict হচ্ছে না ✅
+→ result সবসময় ঠিক আসছে ✅
+```
+
+---
+
+## 💻 Example (Thread-safe না হলে সমস্যা):
+
+```python
+import threading
+
+counter = 0
+
+def increment():
+    global counter
+    for _ in range(100000):
+        counter += 1
+
+t1 = threading.Thread(target=increment)
+t2 = threading.Thread(target=increment)
+
+t1.start()
+t2.start()
+
+t1.join()
+t2.join()
+
+print(counter)   # Expected: 200000 ❌ (often wrong)
+```
+
+👉 এখানে problem হচ্ছে:
+
+* `counter += 1` **atomic না**
+* multiple thread একই সাথে modify করছে 😱
+
+---
+
+## 🔒 Thread-safe করার উপায় (Lock ব্যবহার)
+
+```python
+import threading
+
+counter = 0
+lock = threading.Lock()
+
+def increment():
+    global counter
+    for _ in range(100000):
+        with lock:              # critical section
+            counter += 1
+
+t1 = threading.Thread(target=increment)
+t2 = threading.Thread(target=increment)
+
+t1.start()
+t2.start()
+
+t1.join()
+t2.join()
+
+print(counter)   # ✅ always correct
+```
+
+---
+
+## 🧠 Key Concept:
+
+```text
+Critical Section → যেখানে shared resource modify হয়
+Lock → এক সময়ে একটাই thread ঢুকতে পারবে
+```
+
+---
+
+## 🎯 Interview Line:
+
+> *"Thread safety ensures that shared data remains consistent when accessed by multiple threads. It is typically achieved using synchronization mechanisms like locks."*
+
+---
+
+# ⚠️ Race Condition কী?
+
+---
+
+## 🔑 এক কথায়:
+
+> **Race condition তখন হয় যখন multiple thread একই data modify করতে গিয়ে unpredictable result দেয়**
+
+---
+
+## 🧠 সহজ analogy:
+
+```
+2 জন cashier একই account update করছে
+
+Thread A → balance +100
+Thread B → balance +200
+
+দুজন একসাথে update করলে
+→ final balance wrong হতে পারে 😱
+```
+
+---
+
+## 💻 Real Example:
+
+```python
+balance = 100
+
+def deposit_100():
+    global balance
+    temp = balance
+    temp += 100
+    balance = temp
+
+def deposit_200():
+    global balance
+    temp = balance
+    temp += 200
+    balance = temp
+```
+
+👉 Expected:
+
+```
+100 + 100 + 200 = 400
+```
+
+👉 But possible result:
+
+```
+300 ❌
+```
+
+---
+
+## 📊 Race Condition Flow:
+
+```
+Thread A: read balance = 100
+Thread B: read balance = 100
+
+Thread A: write 200
+Thread B: write 300  ❌ (A-এর update overwrite)
+```
+
+---
+
+## 🔥 Root Cause:
+
+```text
+Non-atomic operations
+Shared mutable state
+No synchronization
+```
+
+---
+
+## 🔒 Solution:
+
+```python
+lock = threading.Lock()
+
+def safe_deposit(amount):
+    global balance
+    with lock:
+        balance += amount
+```
+
+---
+
+## ⚡ Atomic vs Non-Atomic
+
+```python
+# ❌ Non-atomic
+counter += 1
+
+# Actually:
+# 1. read
+# 2. add
+# 3. write
+```
+
+👉 এই ৩টা step-এর মাঝে context switch হলে race condition হয়
+
+---
+
+# 🏦 Real Banking Example
+
+```python
+# ❌ Race condition risk
+withdraw(amount):
+    if balance >= amount:
+        balance -= amount
+```
+
+👉 Problem:
+
+* 2টা withdrawal একসাথে হলে
+* balance negative হতে পারে 😱
+
+---
+
+### ✅ Fix:
+
+```python
+with lock:
+    if balance >= amount:
+        balance -= amount
+```
+
+---
+
+# ⚖️ Thread Safety vs Race Condition
+
+| Topic          | Meaning                              |
+| -------------- | ------------------------------------ |
+| Thread Safety  | Safe execution with multiple threads |
+| Race Condition | Unsafe execution → wrong result      |
+
+---
+
+# 🎯 Final Interview Closing Line
+
+> *"Race condition occurs when multiple threads access shared data without proper synchronization, leading to inconsistent results. Thread safety is achieved by controlling access to critical sections using locks, semaphores, or other synchronization techniques."*
+
+---
+
+## 🚀 Pro Tip (Important)
+
+👉 যদি interviewer জিজ্ঞেস করে:
+**"Python-এ GIL থাকলে race condition হয়?"**
+
+তুমি বলবে:
+
+> *"Yes, GIL does not prevent race conditions. It only ensures one thread executes Python bytecode at a time, but operations like `counter += 1` are not atomic, so race conditions can still occur."*
+
+---
+
+চাও হলে next:
+
+* GIL deep dive (🔥 must)
+* Thread vs Async vs Multiprocessing
+* Deadlock vs Starvation
+
+বললেই next level prep করে দিব 🚀
