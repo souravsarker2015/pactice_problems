@@ -1916,3 +1916,548 @@ MIDDLEWARE = [
 - **SOLID Principles**
 
 কোনটা নিয়ে আগাবে?
+
+## Django ORM, select_related vs prefetch_related, N+1 Problem
+
+---
+
+## ১. ORM কীভাবে কাজ করে
+
+---
+
+### 🔑 এক কথায়:
+
+> ORM = Object Relational Mapper — Python code লিখলে সে নিজেই SQL বানায় এবং Database-এ চালায়। তুমি SQL না জেনেও Database-এ কাজ করতে পারো।
+
+```
+Python Object  ←→  ORM  ←→  SQL  ←→  Database
+BankAccount()      ↕        ↕         PostgreSQL
+.save()         Translate  Execute
+.filter()       to SQL     Query
+```
+
+---
+
+### 💻 ORM vs Raw SQL:
+
+```python
+# Raw SQL — সরাসরি
+cursor.execute("""
+    SELECT * FROM accounts
+    WHERE is_active = TRUE
+    AND balance > 10000
+    ORDER BY created_at DESC
+    LIMIT 10
+""")
+
+# Django ORM — Python-এ
+Account.objects.filter(
+    is_active=True,
+    balance__gt=10000
+).order_by("-created_at")[:10]
+
+# দুটো একই SQL generate করে ✅
+# ORM version অনেক বেশি readable, safe (SQL injection নেই)
+```
+
+---
+
+### 💻 ORM-এর Core — QuerySet:
+
+```python
+# QuerySet = Lazy — SQL এখনো চলেনি!
+accounts = Account.objects.filter(is_active=True)
+# এখানে কোনো DB call হয়নি 😮
+
+# Evaluation হলে তখন SQL চলে:
+list(accounts)          # ← এখন SQL চলে
+for acc in accounts:    # ← এখন SQL চলে
+accounts[0]             # ← এখন SQL চলে
+len(accounts)           # ← এখন SQL চলে
+bool(accounts)          # ← এখন SQL চলে
+```
+
+**Lazy Evaluation-এর সুবিধা:**
+```python
+# Chain করা যায় — একটাই SQL হয়
+result = Account.objects\
+    .filter(is_active=True)\
+    .filter(balance__gt=10000)\
+    .exclude(account_type="FD")\
+    .order_by("-balance")\
+    .values("account_id", "name", "balance")[:10]
+
+# Generated SQL — একটাই query ✅
+# SELECT account_id, name, balance
+# FROM accounts
+# WHERE is_active = TRUE
+# AND balance > 10000
+# AND account_type != 'FD'
+# ORDER BY balance DESC
+# LIMIT 10;
+```
+
+---
+
+### 💻 Common ORM Operations:
+
+```python
+# ── CREATE ──
+acc = Account.objects.create(
+    account_id="SB-001",
+    name="Sourov",
+    balance=50000
+)
+
+# ── READ ──
+# একটা object
+acc = Account.objects.get(account_id="SB-001")
+
+# অনেকগুলো
+accounts = Account.objects.filter(is_active=True)
+
+# First/Last
+first = Account.objects.filter(is_active=True).first()
+
+# Exists — COUNT না করে efficient check
+if Account.objects.filter(account_id="SB-001").exists():
+    print("Account found")
+
+# ── UPDATE ──
+# Single object
+acc.balance = 60000
+acc.save()
+
+# Bulk update — একটাই SQL
+Account.objects.filter(
+    account_type="SB"
+).update(interest_rate=0.06)
+# UPDATE accounts SET interest_rate=0.06
+# WHERE account_type='SB'
+
+# ── DELETE ──
+Account.objects.filter(is_active=False).delete()
+
+# ── AGGREGATION ──
+from django.db.models import Sum, Avg, Count, Max, Min
+
+stats = Account.objects.aggregate(
+    total_balance=Sum("balance"),
+    avg_balance=Avg("balance"),
+    account_count=Count("id"),
+    max_balance=Max("balance")
+)
+print(stats)
+# {'total_balance': 5000000, 'avg_balance': 50000, ...}
+```
+
+---
+
+### 💻 ORM-এ Generated SQL দেখো:
+
+```python
+# Debug করার সময় SQL দেখতে চাইলে
+queryset = Account.objects.filter(is_active=True)
+print(queryset.query)
+# SELECT "accounts"."id", "accounts"."name", ...
+# FROM "accounts"
+# WHERE "accounts"."is_active" = TRUE
+
+# Django Debug Toolbar দিয়েও দেখা যায়
+```
+
+---
+
+## ২. select_related vs prefetch_related
+
+---
+
+### 🔑 কেন দরকার:
+
+```python
+# Model relationship
+class Account(models.Model):
+    name = models.CharField(max_length=100)
+    branch = models.ForeignKey("Branch", on_delete=models.PROTECT)
+
+class Transaction(models.Model):
+    account = models.ForeignKey(Account, related_name="transactions")
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+
+class Branch(models.Model):
+    name = models.CharField(max_length=100)
+    city = models.CharField(max_length=50)
+```
+
+---
+
+### 💻 `select_related` — SQL JOIN দিয়ে:
+
+> **ForeignKey / OneToOne** relationship-এ use করো — একটাই SQL query-তে সব আনে।
+
+```python
+# ❌ Without select_related — 2 queries
+account = Account.objects.get(id=1)   # Query 1
+branch = account.branch                # Query 2 (extra!)
+
+# ✅ With select_related — 1 query
+account = Account.objects.select_related("branch").get(id=1)
+branch = account.branch               # No extra query! ✅
+
+# Generated SQL:
+# SELECT accounts.*, branches.*
+# FROM accounts
+# INNER JOIN branches ON accounts.branch_id = branches.id
+# WHERE accounts.id = 1;
+```
+
+**Multiple levels:**
+```python
+# Transaction → Account → Branch — সব একসাথে
+transactions = Transaction.objects.select_related(
+    "account",           # Transaction → Account
+    "account__branch"    # Account → Branch
+).filter(txn_type="DR")
+
+# Generated SQL — একটাই JOIN query ✅
+# SELECT transactions.*, accounts.*, branches.*
+# FROM transactions
+# JOIN accounts ON transactions.account_id = accounts.id
+# JOIN branches ON accounts.branch_id = branches.id
+# WHERE transactions.txn_type = 'DR'
+```
+
+---
+
+### 💻 `prefetch_related` — Separate Query দিয়ে:
+
+> **ManyToMany / Reverse ForeignKey** relationship-এ use করো — আলাদা query করে Python-এ merge করে।
+
+```python
+# ❌ Without prefetch_related
+accounts = Account.objects.all()
+for acc in accounts:
+    txns = acc.transactions.all()   # প্রতিটা account-এ আলাদা query! 😱
+    # 100 accounts → 101 queries (N+1 problem!)
+
+# ✅ With prefetch_related — 2 queries মাত্র
+accounts = Account.objects.prefetch_related("transactions").all()
+
+for acc in accounts:
+    txns = acc.transactions.all()   # No extra query! ✅
+
+# Generated SQL — দুটো query:
+# Query 1: SELECT * FROM accounts;
+# Query 2: SELECT * FROM transactions
+#          WHERE account_id IN (1, 2, 3, ...);
+# Python-এ merge হয় ✅
+```
+
+**`Prefetch` object দিয়ে filter:**
+```python
+from django.db.models import Prefetch
+
+# শুধু Debit transactions prefetch করো
+debit_txns = Transaction.objects.filter(txn_type="DR")
+
+accounts = Account.objects.prefetch_related(
+    Prefetch(
+        "transactions",
+        queryset=debit_txns,
+        to_attr="debit_transactions"   # আলাদা attribute-এ রাখো
+    )
+).all()
+
+for acc in accounts:
+    print(acc.debit_transactions)   # Filtered transactions ✅
+```
+
+---
+
+### 📊 select_related vs prefetch_related:
+
+| | `select_related` | `prefetch_related` |
+|---|---|---|
+| **কীভাবে** | SQL JOIN | Separate query |
+| **কতটা query** | ১টা | ২টা |
+| **কোথায় merge** | Database | Python |
+| **Relationship** | FK, OneToOne | M2M, Reverse FK |
+| **Large data** | ❌ JOIN heavy | ✅ Better |
+| **Filter করা যায়?** | ❌ | ✅ Prefetch() দিয়ে |
+
+---
+
+## ৩. N+1 Query Problem
+
+---
+
+### 🔑 এক কথায়:
+
+> N+1 মানে — ১টা query দিয়ে N টা object আনলে, তারপর সেই N টা object-এর জন্য আরো N টা query চলে। মোট = N+1 queries।
+
+---
+
+### 💻 N+1 Problem — দেখো কী হয়:
+
+```python
+# ❌ N+1 Problem
+accounts = Account.objects.all()   # Query 1: সব account আনো
+
+for acc in accounts:
+    # প্রতিটা account-এর জন্য আলাদা query!
+    print(acc.branch.name)         # Query 2, 3, 4, ... N+1 😱
+
+# ১০০টা account → ১০১টা query!
+# ১০০০টা account → ১০০১টা query! 💀
+
+# Log দেখলে:
+# SELECT * FROM accounts;
+# SELECT * FROM branches WHERE id = 1;
+# SELECT * FROM branches WHERE id = 2;
+# SELECT * FROM branches WHERE id = 3;
+# ... (N বার)
+```
+
+**আরো ভয়াবহ example:**
+```python
+# ❌ Deeply nested N+1
+accounts = Account.objects.all()   # 1 query
+
+for acc in accounts:               # 100 accounts
+    for txn in acc.transactions.all():  # 100 queries
+        print(txn.amount)
+
+# ১ + ১০০ = ১০১ queries 😱
+# আর প্রতিটা account-এ ১০টা করে transaction হলে
+# ১ + ১০০ = ১০১ queries (still!)
+# কিন্তু data অনেক বেশি আসছে
+```
+
+---
+
+### 💻 N+1 Detect করো:
+
+```python
+# Django Debug Toolbar — development-এ
+# settings.py
+INSTALLED_APPS += ["debug_toolbar"]
+MIDDLEWARE += ["debug_toolbar.middleware.DebugToolbarMiddleware"]
+
+# বা manually:
+from django.db import connection, reset_queries
+from django.conf import settings
+
+settings.DEBUG = True
+
+reset_queries()
+
+# Code চালাও
+accounts = Account.objects.all()
+for acc in accounts:
+    print(acc.branch.name)
+
+# কতটা query হলো দেখো
+print(f"Total queries: {len(connection.queries)}")
+# Total queries: 101 😱
+
+for q in connection.queries:
+    print(q["sql"])
+```
+
+---
+
+### 💻 N+1 Fix করো:
+
+**Fix 1 — `select_related` (ForeignKey):**
+```python
+# ❌ N+1
+accounts = Account.objects.all()
+for acc in accounts:
+    print(acc.branch.name)   # প্রতিটায় query!
+
+# ✅ Fixed
+accounts = Account.objects.select_related("branch").all()
+for acc in accounts:
+    print(acc.branch.name)   # No extra query ✅
+
+# Queries: 101 → 1 ✅
+```
+
+**Fix 2 — `prefetch_related` (Reverse FK):**
+```python
+# ❌ N+1
+accounts = Account.objects.all()
+for acc in accounts:
+    txns = acc.transactions.all()   # প্রতিটায় query!
+
+# ✅ Fixed
+accounts = Account.objects.prefetch_related("transactions").all()
+for acc in accounts:
+    txns = acc.transactions.all()   # No extra query ✅
+
+# Queries: 101 → 2 ✅
+```
+
+**Fix 3 — Deeply nested:**
+```python
+# ❌ Nested N+1
+accounts = Account.objects.all()
+for acc in accounts:
+    for txn in acc.transactions.all():
+        print(txn.account.branch.name)   # Triple N+1! 💀
+
+# ✅ Fixed — সব একসাথে
+accounts = Account.objects\
+    .select_related("branch")\
+    .prefetch_related(
+        Prefetch(
+            "transactions",
+            queryset=Transaction.objects.select_related("account__branch")
+        )
+    ).all()
+
+# Queries: hundreds → 3 ✅
+```
+
+---
+
+### 💻 Banking-এ Real Example — Statement API:
+
+```python
+# ❌ BAD — N+1 nightmare
+def get_account_statement(request, account_id):
+    account = Account.objects.get(account_id=account_id)  # 1 query
+    transactions = account.transactions.all()              # 1 query
+
+    result = []
+    for txn in transactions:
+        result.append({
+            "txn_id": txn.txn_id,
+            "amount": txn.amount,
+            "branch": txn.account.branch.name,    # N query! 😱
+            "teller": txn.teller.name,            # N query! 😱
+            "category": txn.category.label,       # N query! 😱
+        })
+
+    return JsonResponse({"transactions": result})
+# ১০০ transaction → ৩০০+ queries! 💀
+
+
+# ✅ GOOD — Optimized
+def get_account_statement(request, account_id):
+    account = Account.objects\
+        .select_related("branch")\
+        .get(account_id=account_id)          # 1 query
+
+    transactions = Transaction.objects\
+        .select_related(
+            "account__branch",               # JOIN
+            "teller",                        # JOIN
+            "category"                       # JOIN
+        )\
+        .filter(account=account)\
+        .order_by("-created_at")\
+        .only(                               # Needed fields only
+            "txn_id", "amount", "created_at",
+            "account__branch__name",
+            "teller__name",
+            "category__label"
+        )                                    # 1 query
+
+    result = []
+    for txn in transactions:
+        result.append({
+            "txn_id": txn.txn_id,
+            "amount": txn.amount,
+            "branch": txn.account.branch.name,    # No query ✅
+            "teller": txn.teller.name,            # No query ✅
+            "category": txn.category.label,       # No query ✅
+        })
+
+    return JsonResponse({"transactions": result})
+# ৩০০+ queries → 2 queries ✅
+```
+
+---
+
+### 💻 Extra Optimization — `only()` vs `defer()`:
+
+```python
+# only() — শুধু এই fields আনো
+accounts = Account.objects.only(
+    "account_id", "name", "balance"
+)
+# SELECT account_id, name, balance FROM accounts;
+# অন্য fields access করলে extra query হবে
+
+# defer() — এই fields বাদে বাকি সব আনো
+accounts = Account.objects.defer("transaction_history", "notes")
+# SELECT account_id, name, balance, ... (notes বাদে)
+# Large text fields skip করলে performance বাড়ে
+
+# values() — dict হিসেবে আনো (object তৈরি হয় না)
+accounts = Account.objects.values("account_id", "name", "balance")
+# [{"account_id": "SB-001", "name": "Sourov", ...}]
+# সবচেয়ে lightweight ✅
+
+# values_list() — tuple হিসেবে
+ids = Account.objects.values_list("account_id", flat=True)
+# ["SB-001", "SB-002", ...] ← flat=True মানে list of values
+```
+
+---
+
+### 💻 Bulk Operations — N+1 Alternative:
+
+```python
+# ❌ Loop-এ save — N queries
+for account in accounts:
+    account.interest_rate = 0.06
+    account.save()   # প্রতিটায় UPDATE 😱
+
+# ✅ Bulk update — 1 query
+Account.objects.filter(
+    account_type="SB"
+).update(interest_rate=0.06)
+
+
+# ❌ Loop-এ create — N queries
+for data in transaction_data:
+    Transaction.objects.create(**data)   # প্রতিটায় INSERT 😱
+
+# ✅ Bulk create — 1 query
+Transaction.objects.bulk_create([
+    Transaction(**data) for data in transaction_data
+])
+```
+
+---
+
+### 📊 Query Optimization Cheatsheet:
+
+| সমস্যা | Solution | Queries কমে |
+|---|---|---|
+| FK N+1 | `select_related()` | N+1 → 1 |
+| Reverse FK N+1 | `prefetch_related()` | N+1 → 2 |
+| Filtered prefetch | `Prefetch()` object | N+1 → 2 |
+| Extra fields | `only()` / `defer()` | Data কমে |
+| No object needed | `values()` / `values_list()` | Memory কমে |
+| Loop insert | `bulk_create()` | N → 1 |
+| Loop update | `bulk_update()` | N → 1 |
+| Existence check | `exists()` | COUNT → EXISTS |
+
+---
+
+### 🎯 Interview Closing line:
+
+> *"ORM-এর সবচেয়ে বড় trap হলো N+1 problem — banking system-এ statement API-তে ১০০ transaction-এর জন্য ৩০০+ query হতে পারে। `select_related` দিয়ে ForeignKey JOIN করি, `prefetch_related` দিয়ে Reverse FK আলাদা query করে Python-এ merge করি। Production-এ Django Debug Toolbar দিয়ে query count monitor করি। `only()` দিয়ে unnecessary fields avoid করি আর bulk operation দিয়ে N query-কে 1-এ নামাই।"*
+
+---
+
+পরের গুরুত্বপূর্ণ topics:
+- **JWT Authentication — কীভাবে কাজ করে**
+- **REST API Design Best Practices**
+- **SOLID Principles**
+- **Database Indexing + Transaction**
+
+কোনটা নিয়ে আগাবে?
