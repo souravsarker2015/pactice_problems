@@ -3956,3 +3956,790 @@ class Account(models.Model):
 - **Celery + Redis**
 
 কোনটা নিয়ে আগাবে?
+
+## DRF — Permission, Throttling, Pagination, Filtering, File Upload
+
+---
+
+## ১. Permission Classes কীভাবে কাজ করে
+
+---
+
+### 🔑 এক কথায়:
+
+> Permission = **Authentication-এর পরের ধাপ** — User কে সেটা জানা হয়ে গেছে, এখন সে কী করতে **পারবে** সেটা check করা।
+
+```
+Request আসলো
+     ↓
+Authentication  → "তুমি কে?"     (JWT verify)
+     ↓
+Permission      → "তুমি কী পারবে?" (এই check)
+     ↓
+View
+```
+
+---
+
+### 💻 Built-in Permission Classes:
+
+```python
+from rest_framework.permissions import (
+    AllowAny,           # সবাই access পাবে
+    IsAuthenticated,    # Login করতে হবে
+    IsAdminUser,        # Staff/Admin হতে হবে
+    IsAuthenticatedOrReadOnly,  # Login ছাড়া শুধু GET
+)
+
+class AccountView(APIView):
+    permission_classes = [IsAuthenticated]   # Global-এ set
+
+    def get(self, request):
+        ...
+
+
+# View-level override
+class PublicRateView(APIView):
+    permission_classes = [AllowAny]   # সবাই দেখতে পারবে
+
+    def get(self, request):
+        return Response({"USD": 110.50})
+```
+
+---
+
+### 💻 Custom Permission — Banking-এ:
+
+```python
+from rest_framework.permissions import BasePermission
+
+# ১. Role-based Permission
+class IsTeller(BasePermission):
+    """শুধু Bank Teller access পাবে"""
+    message = "Only bank tellers can perform this action"
+
+    def has_permission(self, request, view):
+        return (
+            request.user.is_authenticated and
+            request.user.profile.role == "teller"
+        )
+
+
+class IsAccountOwner(BasePermission):
+    """নিজের account ছাড়া দেখতে পারবে না"""
+
+    def has_object_permission(self, request, view, obj):
+        # obj = Account instance
+        return obj.user == request.user
+
+
+class IsBranchManager(BasePermission):
+    """Branch manager — নিজের branch-এর data দেখতে পারবে"""
+
+    def has_permission(self, request, view):
+        return (
+            request.user.is_authenticated and
+            request.user.profile.role == "manager"
+        )
+
+    def has_object_permission(self, request, view, obj):
+        return (
+            obj.branch_id == request.user.profile.branch_id
+        )
+
+
+# ২. Read-only for Safe Methods
+class ReadOnlyOrAdmin(BasePermission):
+    """Normal user শুধু পড়তে পারবে, Admin সব পারবে"""
+
+    def has_permission(self, request, view):
+        if request.method in ["GET", "HEAD", "OPTIONS"]:
+            return request.user.is_authenticated
+        return request.user.is_staff
+```
+
+---
+
+### 💻 Permission Combine করো:
+
+```python
+# AND — দুটোই true হতে হবে
+class TransactionView(APIView):
+    permission_classes = [IsAuthenticated, IsTeller]
+
+# OR — যেকোনো একটা true হলেই হবে
+from rest_framework.permissions import BasePermission
+
+class IsAdminOrOwner(BasePermission):
+    def has_object_permission(self, request, view, obj):
+        return (
+            request.user.is_staff or          # Admin
+            obj.user == request.user          # Owner
+        )
+
+
+# ViewSet-এ action অনুযায়ী permission
+class AccountViewSet(ModelViewSet):
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        elif self.action == "create":
+            return [IsAuthenticated(), IsTeller()]
+        elif self.action == "destroy":
+            return [IsAdminUser()]
+        return [IsAuthenticated()]
+```
+
+---
+
+### 💻 Global Permission — settings.py:
+
+```python
+REST_FRAMEWORK = {
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+}
+# সব view-এ apply হবে
+# Override করতে চাইলে view-এ আলাদা set করো
+```
+
+---
+
+### 📊 `has_permission` vs `has_object_permission`:
+
+| | `has_permission` | `has_object_permission` |
+|---|---|---|
+| **কখন** | View-এ ঢোকার আগে | Object access করার সময় |
+| **কী পায়** | request, view | request, view, obj |
+| **Use case** | Role check | Owner check |
+| **কখন call হয়** | সব request-এ | `get_object()` call-এ |
+
+---
+
+## ২. Throttling কী?
+
+---
+
+### 🔑 এক কথায়:
+
+> Throttling = **Rate Limiting** — একজন user নির্দিষ্ট সময়ে কতটা request করতে পারবে তার limit।
+
+```
+Brute Force Attack থেকে রক্ষা:
+Login endpoint-এ ১ মিনিটে ৫টার বেশি
+try করলে block করো ✅
+```
+
+---
+
+### 💻 Built-in Throttle Classes:
+
+```python
+from rest_framework.throttling import (
+    AnonRateThrottle,    # Anonymous user-এর জন্য
+    UserRateThrottle,    # Authenticated user-এর জন্য
+    ScopedRateThrottle,  # Specific endpoint-এর জন্য
+)
+```
+
+---
+
+### 💻 Setup — settings.py:
+
+```python
+REST_FRAMEWORK = {
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "100/day",      # Anonymous: দিনে ১০০
+        "user": "1000/day",     # Logged in: দিনে ১০০০
+        "login": "5/minute",    # Login: মিনিটে ৫
+        "transfer": "10/hour",  # Transfer: ঘণ্টায় ১০
+    }
+}
+```
+
+---
+
+### 💻 Scoped Throttle — Endpoint-specific:
+
+```python
+from rest_framework.throttling import ScopedRateThrottle
+
+class LoginView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "login"    # "login": "5/minute" apply হবে
+
+    def post(self, request):
+        ...
+
+
+class TransferView(APIView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "transfer"   # "transfer": "10/hour"
+
+    def post(self, request):
+        ...
+```
+
+---
+
+### 💻 Custom Throttle — Banking:
+
+```python
+from rest_framework.throttling import UserRateThrottle
+from django.core.cache import cache
+import time
+
+class LoginThrottle(UserRateThrottle):
+    """Login-এ brute force protection"""
+    scope = "login"
+    rate = "5/minute"
+
+    def get_cache_key(self, request, view):
+        # IP দিয়ে track করো — user logged in নাও থাকতে পারে
+        ip = request.META.get("REMOTE_ADDR")
+        return f"throttle_login_{ip}"
+
+
+class SensitiveOperationThrottle(UserRateThrottle):
+    """PIN change, password reset — strict limit"""
+    scope = "sensitive"
+    rate = "3/hour"
+
+
+class TransferThrottle(UserRateThrottle):
+    """Transfer amount-based throttle"""
+
+    def allow_request(self, request, view):
+        # Standard rate check
+        if not super().allow_request(request, view):
+            return False
+
+        # Extra: amount-based check
+        amount = request.data.get("amount", 0)
+        if amount > 100000:
+            # Large transfer → stricter limit
+            key = f"large_transfer_{request.user.id}"
+            count = cache.get(key, 0)
+            if count >= 3:
+                return False
+            cache.set(key, count + 1, 3600)
+
+        return True
+
+
+# View-এ multiple throttle
+class LoginView(APIView):
+    throttle_classes = [LoginThrottle]
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        ...
+
+
+class TransferView(APIView):
+    throttle_classes = [TransferThrottle, SensitiveOperationThrottle]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        ...
+```
+
+---
+
+### 💻 Throttle Exceeded — Custom Response:
+
+```python
+from rest_framework.views import exception_handler
+from rest_framework.exceptions import Throttled
+
+def custom_exception_handler(exc, context):
+    response = exception_handler(exc, context)
+
+    if isinstance(exc, Throttled):
+        response.data = {
+            "error": "Too many requests",
+            "message": f"Request limit exceeded. "
+                      f"Retry after {exc.wait:.0f} seconds",
+            "retry_after": exc.wait
+        }
+        # Header-এও দাও
+        response["Retry-After"] = exc.wait
+
+    return response
+
+
+# settings.py
+REST_FRAMEWORK = {
+    "EXCEPTION_HANDLER": "mybank.utils.custom_exception_handler"
+}
+```
+
+---
+
+## ৩. Pagination
+
+---
+
+### 💻 Pagination Types:
+
+```python
+# settings.py
+REST_FRAMEWORK = {
+    "DEFAULT_PAGINATION_CLASS":
+        "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20
+}
+```
+
+---
+
+### 💻 ৩ ধরনের Pagination:
+
+```python
+from rest_framework.pagination import (
+    PageNumberPagination,
+    LimitOffsetPagination,
+    CursorPagination
+)
+
+# ১. PageNumberPagination — সবচেয়ে সহজ
+class StandardPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"   # ?page_size=50
+    max_page_size = 100
+    page_query_param = "page"             # ?page=2
+
+# GET /api/transactions/?page=2&page_size=10
+# Response:
+# {
+#   "count": 500,
+#   "next": "/api/transactions/?page=3",
+#   "previous": "/api/transactions/?page=1",
+#   "results": [...]
+# }
+
+
+# ২. LimitOffsetPagination
+class TransactionPagination(LimitOffsetPagination):
+    default_limit = 20
+    max_limit = 100
+
+# GET /api/transactions/?limit=10&offset=20
+
+
+# ৩. CursorPagination — Large dataset-এ best
+class StatementPagination(CursorPagination):
+    page_size = 20
+    ordering = "-created_at"    # সবসময় consistent order
+
+# GET /api/transactions/?cursor=cD0yMDI0LTAxLTE1
+# Cursor-based — page number নেই, token আছে
+# Infinite scroll-এর জন্য perfect ✅
+```
+
+---
+
+### 💻 Pagination Disable করো:
+
+```python
+# ১. Specific View-এ disable
+class AllBranchesView(ListAPIView):
+    queryset = Branch.objects.all()
+    serializer_class = BranchSerializer
+    pagination_class = None   # ✅ এই view-এ pagination নেই
+
+# ২. Global disable — settings.py
+REST_FRAMEWORK = {
+    "DEFAULT_PAGINATION_CLASS": None,   # সব view-এ off
+    "PAGE_SIZE": None
+}
+
+# ৩. Custom — request param দিয়ে toggle
+class FlexiblePagination(PageNumberPagination):
+    page_size = 20
+
+    def paginate_queryset(self, queryset, request, view=None):
+        # ?no_page=true দিলে pagination off
+        if request.query_params.get("no_page") == "true":
+            return None
+        return super().paginate_queryset(queryset, request, view)
+```
+
+---
+
+## ৪. Filtering, Search, Ordering
+
+---
+
+### 💻 Setup:
+
+```bash
+pip install django-filter
+```
+
+```python
+# settings.py
+INSTALLED_APPS += ["django_filters"]
+
+REST_FRAMEWORK = {
+    "DEFAULT_FILTER_BACKENDS": [
+        "django_filters.rest_framework.DjangoFilterBackend",
+        "rest_framework.filters.SearchFilter",
+        "rest_framework.filters.OrderingFilter",
+    ]
+}
+```
+
+---
+
+### 💻 Basic Filtering:
+
+```python
+from django_filters.rest_framework import DjangoFilterBackend
+
+class TransactionListView(ListAPIView):
+    queryset = Transaction.objects.all()
+    serializer_class = TransactionSerializer
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ["txn_type", "account__account_id"]
+
+# GET /api/transactions/?txn_type=DR
+# GET /api/transactions/?account__account_id=SB-001
+```
+
+---
+
+### 💻 Custom FilterSet — Banking:
+
+```python
+import django_filters
+from django.db.models import Q
+
+class TransactionFilter(django_filters.FilterSet):
+    # Amount range filter
+    min_amount = django_filters.NumberFilter(
+        field_name="amount", lookup_expr="gte"
+    )
+    max_amount = django_filters.NumberFilter(
+        field_name="amount", lookup_expr="lte"
+    )
+
+    # Date range filter
+    from_date = django_filters.DateFilter(
+        field_name="created_at", lookup_expr="date__gte"
+    )
+    to_date = django_filters.DateFilter(
+        field_name="created_at", lookup_expr="date__lte"
+    )
+
+    # Transaction type
+    txn_type = django_filters.ChoiceFilter(
+        choices=[("DR", "Debit"), ("CR", "Credit")]
+    )
+
+    class Meta:
+        model = Transaction
+        fields = ["txn_type", "min_amount", "max_amount",
+                  "from_date", "to_date"]
+
+
+class TransactionListView(ListAPIView):
+    queryset = Transaction.objects.select_related("account")
+    serializer_class = TransactionSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = TransactionFilter
+
+    # Search — LIKE query
+    search_fields = [
+        "account__name",        # account-এর নাম
+        "description",          # description
+        "=account__account_id", # exact match (= prefix)
+        "^account__name",       # starts with (^ prefix)
+    ]
+
+    # Ordering
+    ordering_fields = ["amount", "created_at", "balance_after"]
+    ordering = ["-created_at"]   # Default ordering
+
+# GET /api/transactions/?min_amount=1000&max_amount=50000
+# GET /api/transactions/?from_date=2024-01-01&to_date=2024-01-31
+# GET /api/transactions/?search=Sourov
+# GET /api/transactions/?ordering=-amount
+# GET /api/transactions/?ordering=created_at,-amount
+```
+
+---
+
+### 💻 Custom Filter Backend:
+
+```python
+from rest_framework.filters import BaseFilterBackend
+
+class AccountOwnerFilter(BaseFilterBackend):
+    """নিজের account-এর transaction ছাড়া দেখতে পারবে না"""
+
+    def filter_queryset(self, request, queryset, view):
+        if request.user.is_staff:
+            return queryset   # Admin সব দেখতে পারে
+
+        return queryset.filter(
+            account__user=request.user   # শুধু নিজেরটা
+        )
+
+
+class TransactionListView(ListAPIView):
+    filter_backends = [
+        AccountOwnerFilter,     # Security filter আগে
+        DjangoFilterBackend,    # তারপর user filter
+        SearchFilter,
+        OrderingFilter
+    ]
+```
+
+---
+
+## ৫. File Upload Handle
+
+---
+
+### 💻 Model Setup:
+
+```python
+import os
+from django.db import models
+
+def document_upload_path(instance, filename):
+    """Dynamic path — account অনুযায়ী folder"""
+    ext = filename.split(".")[-1]
+    filename = f"{instance.account.account_id}_{instance.doc_type}.{ext}"
+    return os.path.join("documents", instance.account.account_id, filename)
+
+
+class AccountDocument(models.Model):
+    DOC_TYPES = [
+        ("NID", "National ID"),
+        ("PASSPORT", "Passport"),
+        ("PHOTO", "Photograph"),
+        ("SIGNATURE", "Signature"),
+    ]
+
+    account  = models.ForeignKey("Account", on_delete=models.CASCADE)
+    doc_type = models.CharField(max_length=20, choices=DOC_TYPES)
+    file     = models.FileField(upload_to=document_upload_path)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ["account", "doc_type"]
+```
+
+---
+
+### 💻 Serializer — File Validation:
+
+```python
+from rest_framework import serializers
+
+class DocumentSerializer(serializers.ModelSerializer):
+    file = serializers.FileField()
+
+    class Meta:
+        model = AccountDocument
+        fields = ["id", "doc_type", "file", "uploaded_at"]
+        read_only_fields = ["uploaded_at"]
+
+    def validate_file(self, value):
+        # Size check — 5MB limit
+        max_size = 5 * 1024 * 1024   # 5MB
+        if value.size > max_size:
+            raise serializers.ValidationError(
+                "File too large. Maximum 5MB allowed"
+            )
+
+        # Extension check
+        allowed_extensions = ["pdf", "jpg", "jpeg", "png"]
+        ext = value.name.split(".")[-1].lower()
+        if ext not in allowed_extensions:
+            raise serializers.ValidationError(
+                f"File type not allowed. Use: {allowed_extensions}"
+            )
+
+        # MIME type check — extension spoofing থেকে রক্ষা
+        import magic
+        mime = magic.from_buffer(value.read(1024), mime=True)
+        value.seek(0)   # File pointer reset করো
+
+        allowed_mimes = ["application/pdf", "image/jpeg", "image/png"]
+        if mime not in allowed_mimes:
+            raise serializers.ValidationError(
+                "File content doesn't match extension"
+            )
+
+        return value
+
+
+class MultipleDocumentSerializer(serializers.Serializer):
+    """Multiple file upload"""
+    files = serializers.ListField(
+        child=serializers.FileField(),
+        max_length=5   # সর্বোচ্চ ৫টা
+    )
+    doc_type = serializers.ChoiceField(
+        choices=AccountDocument.DOC_TYPES
+    )
+```
+
+---
+
+### 💻 View — File Upload:
+
+```python
+from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.response import Response
+
+class DocumentUploadView(APIView):
+    parser_classes = [MultiPartParser, FormParser]  # File parse করে
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, account_id):
+        account = get_object_or_404(
+            Account,
+            account_id=account_id,
+            user=request.user   # নিজের account কিনা check
+        )
+
+        serializer = DocumentSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(account=account)
+            return Response(
+                serializer.data,
+                status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=400)
+
+
+class MultipleUploadView(APIView):
+    parser_classes = [MultiPartParser]
+
+    def post(self, request, account_id):
+        files = request.FILES.getlist("files")   # Multiple files
+
+        if not files:
+            return Response(
+                {"error": "No files provided"},
+                status=400
+            )
+
+        account = get_object_or_404(Account, account_id=account_id)
+        uploaded = []
+
+        for file in files:
+            serializer = DocumentSerializer(
+                data={
+                    "file": file,
+                    "doc_type": request.data.get("doc_type")
+                }
+            )
+            if serializer.is_valid():
+                doc = serializer.save(account=account)
+                uploaded.append(serializer.data)
+
+        return Response({
+            "uploaded": len(uploaded),
+            "documents": uploaded
+        })
+```
+
+---
+
+### 💻 settings.py — Media Files:
+
+```python
+import os
+
+MEDIA_URL = "/media/"
+MEDIA_ROOT = os.path.join(BASE_DIR, "media")
+
+# Production-এ S3 use করো
+DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
+
+AWS_ACCESS_KEY_ID = "your-key"
+AWS_SECRET_ACCESS_KEY = "your-secret"
+AWS_STORAGE_BUCKET_NAME = "ucb-documents"
+AWS_S3_REGION_NAME = "ap-southeast-1"
+
+# File URL expiry — Signed URL
+AWS_QUERYSTRING_EXPIRE = 300   # 5 minutes
+```
+
+---
+
+### 💻 Secure File Download — Signed URL:
+
+```python
+class DocumentDownloadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, doc_id):
+        doc = get_object_or_404(
+            AccountDocument,
+            id=doc_id,
+            account__user=request.user   # নিজেরটা কিনা
+        )
+
+        # Local storage
+        if settings.DEBUG:
+            return FileResponse(
+                open(doc.file.path, "rb"),
+                as_attachment=True,
+                filename=doc.file.name
+            )
+
+        # Production — S3 Signed URL
+        import boto3
+        s3 = boto3.client("s3")
+        url = s3.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": settings.AWS_STORAGE_BUCKET_NAME,
+                "Key": doc.file.name
+            },
+            ExpiresIn=300   # 5 minutes
+        )
+        return Response({"download_url": url})
+```
+
+---
+
+### 📊 সব Topics Summary:
+
+| Topic | Key Point |
+|---|---|
+| **Permission** | `has_permission` → View level, `has_object_permission` → Object level |
+| **Throttling** | Scope দিয়ে endpoint-specific rate limit |
+| **Pagination** | `pagination_class = None` দিয়ে disable |
+| **Filtering** | FilterSet + SearchFilter + OrderingFilter |
+| **File Upload** | `MultiPartParser` + size/MIME validation |
+
+---
+
+### 🎯 Interview Closing line:
+
+> *"Banking system-এ Permission তিন layer-এ রাখি — IsAuthenticated, Role-based (IsTeller/IsManager), আর Object-level (IsAccountOwner)। Throttling দিয়ে login endpoint-এ brute force attack block করি — 5/minute limit। File upload-এ শুধু extension check না, MIME type-ও verify করি কারণ extension rename করে malicious file upload করা সম্ভব। Production-এ S3-এ রাখি, Signed URL দিয়ে serve করি যাতে file URL permanent না হয়।"*
+
+---
+
+পরের গুরুত্বপূর্ণ topics:
+- **Database Indexing + Transaction Isolation**
+- **REST API Design Best Practices**
+- **SOLID Principles**
+- **Celery + Redis — Background Tasks**
+- **Design Patterns**
+
+কোনটা নিয়ে আগাবে?
