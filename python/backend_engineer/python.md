@@ -6201,3 +6201,255 @@ with lock:
 * Deadlock vs Starvation
 
 বললেই next level prep করে দিব 🚀
+
+
+
+
+তোমার style maintain করে **interview-ready Singleton pattern** নিচে দিলাম 👇
+
+---
+
+# 🧠 Singleton Pattern implement করো
+
+---
+
+## 🔑 এক কথায়:
+
+> **Singleton pattern ensures — পুরো application-এ class-এর একটাই instance থাকবে**
+
+---
+
+## 🧠 কেন দরকার?
+
+```text
+✅ Database connection
+✅ Logger
+✅ Config manager
+```
+
+👉 multiple instance হলে:
+
+* memory waste ❌
+* inconsistent state ❌
+
+---
+
+# 🧩 Method 1 — `__new__` override (Most common)
+
+---
+
+### 💻 Implementation:
+
+```python id="c6h0pw"
+class Singleton:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+
+# Test
+a = Singleton()
+b = Singleton()
+
+print(a is b)   # True ✅
+```
+
+---
+
+### 🧠 কী হচ্ছে এখানে:
+
+```text
+__new__ → object create করার আগেই call হয়
+একবার instance তৈরি হলে
+→ পরেরবার same instance return করে
+```
+
+---
+
+# 🧩 Method 2 — Class Method (Lazy Initialization)
+
+---
+
+```python id="c8qk5o"
+class Singleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+
+# Test
+a = Singleton.get_instance()
+b = Singleton.get_instance()
+
+print(a is b)   # True ✅
+```
+
+---
+
+# 🧩 Method 3 — Decorator
+
+---
+
+```python id="7qk7fb"
+def singleton(cls):
+    instances = {}
+
+    def wrapper(*args, **kwargs):
+        if cls not in instances:
+            instances[cls] = cls(*args, **kwargs)
+        return instances[cls]
+
+    return wrapper
+
+
+@singleton
+class Database:
+    pass
+
+
+a = Database()
+b = Database()
+
+print(a is b)   # True ✅
+```
+
+---
+
+# 🧩 Method 4 — Metaclass (Advanced 🔥)
+
+---
+
+```python id="ehjv1h"
+class SingletonMeta(type):
+    _instances = {}
+
+    def __call__(cls, *args, **kwargs):
+        if cls not in cls._instances:
+            cls._instances[cls] = super().__call__(*args, **kwargs)
+        return cls._instances[cls]
+
+
+class Logger(metaclass=SingletonMeta):
+    pass
+
+
+a = Logger()
+b = Logger()
+
+print(a is b)   # True ✅
+```
+
+---
+
+# ⚠️ Thread-Safe Singleton (Important 🔥)
+
+👉 Interview-এ এইটা বললে impression strong হবে
+
+```python id="b0k8r2"
+import threading
+
+class Singleton:
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:   # critical section
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+        return cls._instance
+```
+
+---
+
+### 🧠 কেন double check?
+
+```text
+First check → performance
+Second check → correctness (race condition avoid)
+```
+
+---
+
+# 🏦 Real Banking Example
+
+```python id="df7h1r"
+class DBConnection:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            print("Creating DB connection...")
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+
+db1 = DBConnection()
+db2 = DBConnection()
+
+# Only one connection created ✅
+```
+
+---
+
+# ⚠️ Common Mistake
+
+```python id="7m3q2v"
+# ❌ __init__ control না করলে
+# multiple initialization হতে পারে
+```
+
+👉 Fix:
+
+```python id="7tp9px"
+def __init__(self):
+    if hasattr(self, "_initialized"):
+        return
+    self._initialized = True
+```
+
+---
+
+# ⚖️ Comparison
+
+| Method       | Difficulty | Use case            |
+| ------------ | ---------- | ------------------- |
+| **new**      | Easy       | most common         |
+| Class method | Easy       | controlled access   |
+| Decorator    | Medium     | reusable            |
+| Metaclass    | Hard       | advanced frameworks |
+
+---
+
+# 🎯 Interview Closing Line
+
+> *"Singleton pattern ensures a single instance across the application. In Python, I typically implement it using `__new__` or a metaclass. For multithreaded environments like backend systems, I ensure thread safety using locks to prevent race conditions."*
+
+---
+
+## 🚀 Pro Tip (UCB interview killer)
+
+👉 যদি interviewer জিজ্ঞেস করে:
+**"Where have you used it?"**
+
+তুমি বলবে:
+
+> *"In backend systems, I use Singleton for database connections, configuration management, and logging to ensure consistent state and avoid unnecessary resource usage."*
+
+---
+
+চাও হলে next high-impact topics:
+
+* Decorator (🔥 must)
+* Context Manager
+* Dependency Injection (very important for backend)
+* Design patterns (Factory, Strategy)
+
+বললেই next level prep 🚀
