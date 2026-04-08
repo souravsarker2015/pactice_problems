@@ -2461,3 +2461,1498 @@ Transaction.objects.bulk_create([
 - **Database Indexing + Transaction**
 
 কোনটা নিয়ে আগাবে?
+
+## Authentication in DRF — JWT & OAuth2
+
+---
+
+## ১. Authentication Types in DRF
+
+---
+
+### 🔑 DRF-এ ৪ ধরনের Authentication:
+
+```
+DRF Authentication
+├── 1. BasicAuthentication      → username/password (Base64)
+├── 2. SessionAuthentication    → Django session cookie
+├── 3. TokenAuthentication      → Simple static token
+└── 4. JWTAuthentication        → JSON Web Token (Best)
+```
+
+---
+
+### 💻 BasicAuthentication — সবচেয়ে সহজ:
+
+```python
+# settings.py
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.BasicAuthentication",
+    ]
+}
+
+# প্রতিটা request-এ Header পাঠাতে হয়:
+# Authorization: Basic c291cm92OjEyMzQ=
+# (username:password → Base64 encoded)
+
+# ❌ Banking-এ use করো না — password প্রতিটা request-এ যায়!
+```
+
+---
+
+### 💻 SessionAuthentication — Browser-based:
+
+```python
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication",
+    ]
+}
+
+# Login করলে → Session cookie set হয়
+# Browser automatically cookie পাঠায়
+# CSRF protection দরকার
+
+# ❌ Mobile app বা API-তে suitable না
+# ✅ Django admin বা browser-based app-এ ঠিক আছে
+```
+
+---
+
+### 💻 TokenAuthentication — Static Token:
+
+```python
+INSTALLED_APPS += ["rest_framework.authtoken"]
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.TokenAuthentication",
+    ]
+}
+
+# Token তৈরি করো
+from rest_framework.authtoken.models import Token
+
+token = Token.objects.create(user=user)
+print(token.key)   # "9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b"
+
+# Request Header:
+# Authorization: Token 9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b
+
+# ❌ Token expire হয় না — security risk!
+# ❌ Logout করলেও token valid থাকে DB-তে না মুছলে
+# ✅ Simple internal tools-এ ঠিক আছে
+```
+
+---
+
+### 📊 কোনটা কোথায়:
+
+| Type | Security | Mobile | Expiry | Banking? |
+|---|---|---|---|---|
+| Basic | ❌ খুব কম | ❌ | ❌ | ❌ না |
+| Session | মাঝারি | ❌ | ✅ | ❌ না |
+| Token | মাঝারি | ✅ | ❌ | ❌ না |
+| JWT | ✅ বেশি | ✅ | ✅ | ✅ হ্যাঁ |
+
+---
+
+## ২. JWT — কীভাবে কাজ করে এবং Implement করো
+
+---
+
+### 🔑 JWT কী:
+
+> JWT = JSON Web Token — তিনটা অংশ নিয়ে তৈরি, **stateless** — Server-এ কিছু save করতে হয় না।
+
+```
+JWT Structure:
+
+eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoxfQ.abc123
+│                    │                   │
+└── Header           └── Payload         └── Signature
+    (algorithm)          (data)              (verify করে)
+```
+
+```python
+# Header — decoded
+{
+    "alg": "HS256",    # Algorithm
+    "typ": "JWT"
+}
+
+# Payload — decoded
+{
+    "user_id": 42,
+    "username": "sourov",
+    "role": "customer",
+    "exp": 1735689600,  # Expiry timestamp
+    "iat": 1735686000   # Issued at
+}
+
+# Signature — কীভাবে তৈরি হয়:
+HMACSHA256(
+    base64(header) + "." + base64(payload),
+    SECRET_KEY
+)
+```
+
+---
+
+### 🔄 JWT Flow — Step by Step:
+
+```
+Client                          Server
+  │                               │
+  │── POST /login {user, pass} ──→│
+  │                               │ Verify credentials
+  │                               │ Generate Access Token (15min)
+  │                               │ Generate Refresh Token (7days)
+  │←── {access, refresh} ────────│
+  │                               │
+  │── GET /api/accounts/ ────────→│
+  │   Authorization: Bearer       │ Verify JWT signature
+  │   <access_token>              │ Check expiry
+  │←── {accounts data} ──────────│
+  │                               │
+  │ (15 min পরে token expire)     │
+  │                               │
+  │── POST /auth/refresh/ ───────→│
+  │   {refresh: <refresh_token>}  │ Verify refresh token
+  │←── {new access_token} ───────│
+  │                               │
+  │── POST /logout/ ─────────────→│
+  │   {refresh: <refresh_token>}  │ Refresh token blacklist-এ
+  │←── {success} ────────────────│
+```
+
+---
+
+### 💻 JWT Implementation — Step by Step:
+
+**Install:**
+```bash
+pip install djangorestframework-simplejwt
+```
+
+**settings.py:**
+```python
+INSTALLED_APPS = [
+    ...
+    "rest_framework",
+    "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",  # Logout-এর জন্য
+]
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+}
+
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),   # Short-lived
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),       # Long-lived
+    "ROTATE_REFRESH_TOKENS": True,     # Refresh করলে নতুন token
+    "BLACKLIST_AFTER_ROTATION": True,  # পুরনো blacklist হয়
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": SECRET_KEY,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+}
+```
+
+---
+
+### 💻 Custom JWT — Banking-এর জন্য:
+
+```python
+# authentication/serializers.py
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.views import TokenObtainPairView
+
+class BankingTokenSerializer(TokenObtainPairSerializer):
+
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+
+        # Custom claims — Banking info যোগ করো
+        token["username"] = user.username
+        token["role"] = user.profile.role           # customer/teller/admin
+        token["account_id"] = user.profile.account_id
+        token["branch_id"] = user.profile.branch_id
+        token["permissions"] = list(user.get_all_permissions())
+
+        return token
+
+    def validate(self, attrs):
+        data = super().validate(attrs)
+
+        # Extra info response-এ যোগ করো
+        data["user"] = {
+            "id": self.user.id,
+            "username": self.user.username,
+            "role": self.user.profile.role,
+            "account_id": self.user.profile.account_id,
+        }
+        data["token_type"] = "Bearer"
+
+        return data
+
+
+class BankingTokenView(TokenObtainPairView):
+    serializer_class = BankingTokenSerializer
+```
+
+---
+
+### 💻 URLs Setup:
+
+```python
+# urls.py
+from django.urls import path
+from rest_framework_simplejwt.views import TokenRefreshView, TokenBlacklistView
+from .views import BankingTokenView
+
+urlpatterns = [
+    # Login → tokens দেয়
+    path("api/auth/login/", BankingTokenView.as_view()),
+
+    # Refresh → নতুন access token
+    path("api/auth/refresh/", TokenRefreshView.as_view()),
+
+    # Logout → refresh token blacklist করে
+    path("api/auth/logout/", TokenBlacklistView.as_view()),
+]
+```
+
+---
+
+### 💻 Custom Logout View:
+
+```python
+# authentication/views.py
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError
+
+class LogoutView(APIView):
+
+    def post(self, request):
+        refresh_token = request.data.get("refresh")
+
+        if not refresh_token:
+            return Response(
+                {"error": "Refresh token required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            token = RefreshToken(refresh_token)
+            token.blacklist()   # Token blacklist-এ যোগ করো
+
+            return Response(
+                {"message": "Successfully logged out"},
+                status=status.HTTP_200_OK
+            )
+
+        except TokenError:
+            return Response(
+                {"error": "Invalid token"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+```
+
+---
+
+### 💻 Protected View — JWT দিয়ে:
+
+```python
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+class AccountBalanceView(APIView):
+    permission_classes = [IsAuthenticated]   # JWT verify হবে
+
+    def get(self, request, account_id):
+        # request.user → JWT থেকে automatically set
+        user = request.user
+
+        # JWT payload থেকে custom claim পাও
+        account_id_from_token = request.auth.payload.get("account_id")
+
+        # Security check — নিজের account কিনা
+        if account_id != account_id_from_token:
+            return Response(
+                {"error": "Unauthorized"},
+                status=403
+            )
+
+        account = Account.objects.get(account_id=account_id)
+        return Response({"balance": account.balance})
+
+
+# Custom Permission
+class IsTeller(BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.user.is_authenticated and
+            request.auth.payload.get("role") == "teller"
+        )
+
+class TransactionApprovalView(APIView):
+    permission_classes = [IsAuthenticated, IsTeller]   # Teller only
+
+    def post(self, request):
+        # শুধু Teller access করতে পারবে
+        ...
+```
+
+---
+
+### ⚠️ JWT Security Best Practices:
+
+```python
+# ১. Short Access Token lifetime
+ACCESS_TOKEN_LIFETIME = timedelta(minutes=15)   # ✅
+# ❌ না: timedelta(days=30) — compromise হলে ৩০ দিন exposed
+
+# ২. HTTPS only — token কখনো HTTP-তে না
+SECURE_SSL_REDIRECT = True
+
+# ৩. Sensitive data payload-এ না
+# ❌ Bad
+token["password"] = user.password
+token["pin"] = user.pin
+
+# ✅ Good — শুধু identifier
+token["user_id"] = user.id
+token["role"] = user.role
+
+# ৪. Token rotation
+ROTATE_REFRESH_TOKENS = True      # প্রতিবার নতুন refresh token
+BLACKLIST_AFTER_ROTATION = True   # পুরনো invalid
+
+# ৫. Logout-এ blacklist
+token.blacklist()   # DB-তে store করো
+```
+
+---
+
+## ৩. OAuth2 — কীভাবে কাজ করে
+
+---
+
+### 🔑 এক কথায়:
+
+> OAuth2 = Open Authorization — **Third-party app-কে** তোমার resource-এ **limited access** দেওয়ার standard protocol। তোমার password না দিয়েই।
+
+সহজ analogy:
+```
+Hotel-এ check-in করলে একটা Key Card পাও
+এই key card দিয়ে শুধু নিজের room খোলা যায়
+Security room, Pool room খোলা যায় না
+
+OAuth2 = সেই Key Card System
+তুমি Google account-এর password না দিয়ে
+"Google দিয়ে Login" করলে শুধু
+নির্দিষ্ট কিছু access দিলে
+```
+
+---
+
+### 🔄 OAuth2 Flow — Authorization Code (Most Secure):
+
+```
+User          Client App         Auth Server      Resource Server
+  │               │              (Google/FB)      (API)
+  │               │                   │               │
+  │─ Login ──────→│                   │               │
+  │               │── Redirect ──────→│               │
+  │               │   /authorize      │               │
+  │←─────── Login Page ──────────────│               │
+  │                                   │               │
+  │─ Google credentials ─────────────→│               │
+  │                                   │ Verify        │
+  │←── Consent Screen ───────────────│               │
+  │    "Allow access to: email, name" │               │
+  │                                   │               │
+  │─ Allow ──────────────────────────→│               │
+  │                                   │               │
+  │←─────── Redirect with Code ───────│               │
+  │         /callback?code=AUTH_CODE  │               │
+  │               │                   │               │
+  │               │── code + secret ─→│               │
+  │               │                   │ Verify        │
+  │               │←── Access Token ──│               │
+  │               │                   │               │
+  │               │── Bearer Token ───────────────────→│
+  │               │                   │  Return Data  │
+  │               │←──────────────────────────────────│
+  │←─ Data ───────│                   │               │
+```
+
+---
+
+### 💻 OAuth2 Implement — django-oauth-toolkit:
+
+**Install:**
+```bash
+pip install django-oauth-toolkit
+```
+
+**settings.py:**
+```python
+INSTALLED_APPS = [
+    ...
+    "oauth2_provider",
+    "rest_framework",
+]
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "oauth2_provider.contrib.rest_framework.OAuth2Authentication",
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ],
+}
+
+OAUTH2_PROVIDER = {
+    "ACCESS_TOKEN_EXPIRE_SECONDS": 3600,      # 1 hour
+    "REFRESH_TOKEN_EXPIRE_SECONDS": 86400,    # 1 day
+    "SCOPES": {
+        "read": "Read access",
+        "write": "Write access",
+        "transactions": "View transactions",
+        "transfer": "Transfer money",
+        "admin": "Admin access",
+    }
+}
+```
+
+---
+
+### 💻 OAuth2 Views:
+
+```python
+# urls.py
+from django.urls import path, include
+from oauth2_provider import urls as oauth2_urls
+
+urlpatterns = [
+    path("o/", include(oauth2_urls)),         # OAuth2 endpoints
+    path("api/", include("accounts.urls")),
+]
+
+# Automatically generates:
+# /o/authorize/    ← User consent
+# /o/token/        ← Get token
+# /o/revoke_token/ ← Revoke token
+# /o/introspect/   ← Token info
+```
+
+---
+
+### 💻 Scope-based Permission — Banking:
+
+```python
+from oauth2_provider.contrib.rest_framework import (
+    TokenHasReadWriteScope,
+    TokenHasScope
+)
+
+class AccountView(APIView):
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope]
+
+    def get(self, request):
+        # "read" scope দরকার
+        return Response({"balance": 50000})
+
+    def post(self, request):
+        # "write" scope দরকার
+        return Response({"status": "created"})
+
+
+class TransferView(APIView):
+    # "transfer" scope ছাড়া access নেই
+    permission_classes = [IsAuthenticated, TokenHasScope]
+    required_scopes = ["transfer"]
+
+    def post(self, request):
+        # শুধু transfer scope থাকলে আসতে পারবে
+        amount = request.data.get("amount")
+        return Response({"status": "transferred"})
+
+
+class AdminView(APIView):
+    permission_classes = [IsAuthenticated, TokenHasScope]
+    required_scopes = ["admin"]
+
+    def get(self, request):
+        # Admin scope ছাড়া 403
+        return Response({"all_accounts": [...]})
+```
+
+---
+
+### 💻 Third-party Login — Google OAuth2:
+
+```python
+# social-auth-app-django use করে
+# pip install social-auth-app-django
+
+# settings.py
+AUTHENTICATION_BACKENDS = [
+    "social_core.backends.google.GoogleOAuth2",
+    "django.contrib.auth.backends.ModelBackend",
+]
+
+SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = "Google Client ID"
+SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = "Google Client Secret"
+SOCIAL_AUTH_GOOGLE_OAUTH2_SCOPE = [
+    "email",
+    "profile"
+]
+
+# Pipeline — Login হলে কী করবে
+SOCIAL_AUTH_PIPELINE = (
+    "social_core.pipeline.social_auth.social_details",
+    "social_core.pipeline.social_auth.social_uid",
+    "social_core.pipeline.social_auth.auth_allowed",
+    "social_core.pipeline.social_auth.social_user",
+    "social_core.pipeline.user.get_username",
+    "social_core.pipeline.user.create_user",
+    "mybank.pipeline.create_bank_profile",   # Custom step
+    "social_core.pipeline.social_auth.associate_user",
+)
+
+
+# Custom pipeline — Google login-এ bank profile তৈরি
+def create_bank_profile(backend, user, response, *args, **kwargs):
+    from accounts.models import UserProfile
+
+    if not hasattr(user, "profile"):
+        UserProfile.objects.create(
+            user=user,
+            email=response.get("email"),
+            name=response.get("name"),
+            auth_provider="google"
+        )
+```
+
+---
+
+### 📊 JWT vs OAuth2 — কোনটা কখন:
+
+| | JWT | OAuth2 |
+|---|---|---|
+| **Use case** | API Authentication | Third-party Authorization |
+| **Password share** | হ্যাঁ (নিজের system) | না |
+| **Scope control** | Basic | Fine-grained ✅ |
+| **Third-party** | ❌ | ✅ |
+| **Complexity** | কম | বেশি |
+| **Banking internal** | ✅ Best | ❌ Overkill |
+| **Partner API** | মাঝারি | ✅ Best |
+| **Social Login** | ❌ | ✅ |
+
+---
+
+### 🏦 Banking-এ কোনটা কোথায়:
+
+```
+UCB Banking System
+
+Internal API (Mobile App ↔ Backend)
+└── JWT Authentication ✅
+    → Customer login করে JWT পায়
+    → Balance check, Transaction করে
+
+Partner Integration (Bkash, SSLCommerz)
+└── OAuth2 ✅
+    → Limited scope দেওয়া যায়
+    → "শুধু payment verify করতে পারবে"
+    → "balance দেখতে পারবে না"
+
+Admin Dashboard
+└── JWT + Role-based Permission ✅
+    → role: "admin" claim check করে
+
+Third-party Fintech App
+└── OAuth2 Authorization Code ✅
+    → User নিজে consent দেয়
+    → "এই app আমার transaction দেখতে পারবে"
+```
+
+---
+
+### 🎯 Interview Closing line:
+
+> *"Banking system-এ internal API-তে JWT use করি — stateless, fast, আর mobile app-এর জন্য perfect। Access token 15 minutes, refresh token 7 days, logout-এ blacklist। Partner integration-এ OAuth2 — কারণ Bkash বা SSLCommerz-কে শুধু specific scope-এ access দেওয়া দরকার, full account access না। JWT payload-এ role আর branch_id রাখি যাতে প্রতিটা request-এ DB query না লাগে।"*
+
+---
+
+পরের গুরুত্বপূর্ণ topics:
+- **REST API Design Best Practices**
+- **Database Indexing + Transaction**
+- **SOLID Principles**
+- **Design Patterns — Singleton, Factory, Repository**
+
+কোনটা নিয়ে আগাবে?
+
+## Django/DRF — ৭টা Important Topic
+
+---
+
+## ১. Migration কী?
+
+---
+
+### 🔑 এক কথায়:
+
+> Migration হলো Django-র **database schema version control** — Model-এ change করলে সেই change Database-এ apply করার mechanism।
+
+সহজ analogy:
+```
+Git = Code-এর version control
+Migration = Database-এর version control
+
+models.py change করলে → migration file তৈরি হয়
+migration apply করলে → Database table change হয়
+```
+
+---
+
+### 💻 Migration Workflow:
+
+```bash
+# Step 1: Model বানাও বা change করো
+# accounts/models.py
+
+# Step 2: Migration file তৈরি করো
+python manage.py makemigrations
+# accounts/migrations/0001_initial.py তৈরি হলো
+
+# Step 3: Database-এ apply করো
+python manage.py migrate
+
+# Status দেখো
+python manage.py showmigrations
+# accounts
+#  [X] 0001_initial          ← applied
+#  [ ] 0002_add_phone_field   ← not applied
+```
+
+---
+
+### 💻 Migration File — ভেতরে কী থাকে:
+
+```python
+# accounts/migrations/0001_initial.py
+from django.db import migrations, models
+
+class Migration(migrations.Migration):
+
+    dependencies = []   # আগে কোন migration চালাতে হবে
+
+    operations = [
+        migrations.CreateTable(
+            name="Account",
+            fields=[
+                ("id", models.AutoField(primary_key=True)),
+                ("account_id", models.CharField(max_length=20)),
+                ("name", models.CharField(max_length=100)),
+                ("balance", models.DecimalField(
+                    max_digits=15, decimal_places=2
+                )),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+            ],
+        ),
+    ]
+```
+
+---
+
+### 💻 Common Migration Operations:
+
+```python
+# Model-এ field যোগ করলে
+class Account(models.Model):
+    name = models.CharField(max_length=100)
+    phone = models.CharField(max_length=15, null=True)  # নতুন field
+
+# makemigrations চালালে:
+# 0002_account_phone.py তৈরি হয়
+# ALTER TABLE accounts ADD COLUMN phone VARCHAR(15);
+
+# Field rename
+python manage.py makemigrations --name rename_phone_to_mobile
+
+# Data migration — data manipulate করো
+from django.db import migrations
+
+def set_default_branch(apps, schema_editor):
+    Account = apps.get_model("accounts", "Account")
+    Account.objects.filter(branch=None).update(branch_id=1)
+
+class Migration(migrations.Migration):
+    dependencies = [("accounts", "0003_account_branch")]
+
+    operations = [
+        migrations.RunPython(
+            set_default_branch,           # forward
+            migrations.RunPython.noop     # backward (rollback)
+        ),
+    ]
+```
+
+---
+
+### 💻 Migration Commands:
+
+```bash
+# Rollback — আগের migration-এ ফিরে যাও
+python manage.py migrate accounts 0001
+
+# Specific app-এর migration
+python manage.py makemigrations accounts
+
+# SQL দেখো — apply না করে
+python manage.py sqlmigrate accounts 0001
+
+# Fake migration — DB already আছে কিন্তু record নেই
+python manage.py migrate --fake accounts 0001
+
+# Squash — অনেক migration একটায় কমাও
+python manage.py squashmigrations accounts 0001 0010
+```
+
+---
+
+## ২. Signals কী?
+
+---
+
+### 🔑 এক কথায়:
+
+> Signal হলো Django-র **event system** — কোনো কিছু ঘটলে (model save, delete) automatically অন্য code চালানো যায়, বিনা coupling-এ।
+
+সহজ analogy:
+```
+Signal = WhatsApp notification
+
+তুমি message পাঠালে (event)
+তোমার phone-এ notification আসে (handler)
+তুমি জানো না কে দেখবে — decoupled ✅
+```
+
+---
+
+### 💻 Built-in Signals:
+
+```python
+# Model signals
+pre_save     → save() এর আগে
+post_save    → save() এর পরে
+pre_delete   → delete() এর আগে
+post_delete  → delete() এর পরে
+
+# Request signals
+request_started   → request আসার সময়
+request_finished  → response যাওয়ার সময়
+```
+
+---
+
+### 💻 Signal Use করো:
+
+**উপায় ১ — `@receiver` decorator:**
+```python
+# accounts/signals.py
+from django.db.models.signals import post_save, pre_save
+from django.dispatch import receiver
+from .models import Account, Transaction
+
+@receiver(post_save, sender=Account)
+def account_created_handler(sender, instance, created, **kwargs):
+    if created:
+        # নতুন account তৈরি হলে
+        print(f"New account: {instance.account_id}")
+
+        # Welcome SMS পাঠাও
+        send_sms(
+            instance.phone,
+            f"Welcome to UCB! Account: {instance.account_id}"
+        )
+
+        # Default settings তৈরি করো
+        AccountSettings.objects.create(
+            account=instance,
+            daily_limit=50000,
+            sms_alert=True
+        )
+
+
+@receiver(post_save, sender=Transaction)
+def transaction_notification(sender, instance, created, **kwargs):
+    if created:
+        # Transaction হলে SMS alert
+        send_sms(
+            instance.account.phone,
+            f"TXN: {instance.txn_type} {instance.amount} BDT. "
+            f"Balance: {instance.balance_after} BDT"
+        )
+
+
+@receiver(pre_save, sender=Account)
+def log_balance_change(sender, instance, **kwargs):
+    if instance.pk:
+        # Update হচ্ছে — আগের value দেখো
+        old = Account.objects.get(pk=instance.pk)
+        if old.balance != instance.balance:
+            AuditLog.objects.create(
+                account=instance,
+                old_balance=old.balance,
+                new_balance=instance.balance,
+                changed_by="system"
+            )
+```
+
+**apps.py-তে Register করো:**
+```python
+# accounts/apps.py
+from django.apps import AppConfig
+
+class AccountsConfig(AppConfig):
+    name = "accounts"
+
+    def ready(self):
+        import accounts.signals   # signals import করো ✅
+```
+
+---
+
+### 💻 Custom Signal বানাও:
+
+```python
+# signals.py
+from django.dispatch import Signal
+
+# Custom signal define করো
+fraud_detected = Signal()
+large_transaction = Signal()
+
+# যেখানে event হয় সেখানে send করো
+def process_transaction(account, amount):
+    if amount > 100000:
+        large_transaction.send(
+            sender=account.__class__,
+            account=account,
+            amount=amount
+        )
+
+    risk_score = fraud_checker.check(account, amount)
+    if risk_score > 0.8:
+        fraud_detected.send(
+            sender=account.__class__,
+            account=account,
+            risk_score=risk_score
+        )
+
+
+# Handler
+@receiver(fraud_detected)
+def handle_fraud(sender, account, risk_score, **kwargs):
+    account.freeze()
+    notify_security_team(account, risk_score)
+    logger.critical(f"FRAUD: {account.account_id}, score: {risk_score}")
+
+
+@receiver(large_transaction)
+def handle_large_transaction(sender, account, amount, **kwargs):
+    # Bangladesh Bank reporting — ১ লাখের বেশি
+    bangladesh_bank_report(account, amount)
+```
+
+---
+
+### ⚠️ Signal-এর সতর্কতা:
+
+```python
+# ❌ Signal-এ heavy কাজ করো না — request block হবে
+@receiver(post_save, sender=Transaction)
+def bad_handler(sender, instance, **kwargs):
+    generate_pdf_report()   # ❌ Slow! Request block হবে
+    send_email()            # ❌ Slow!
+
+# ✅ Celery task-এ পাঠাও — async
+@receiver(post_save, sender=Transaction)
+def good_handler(sender, instance, **kwargs):
+    generate_pdf_report.delay(instance.id)   # ✅ Async
+    send_email.delay(instance.account.email) # ✅ Async
+```
+
+---
+
+## ৩. DRF কেন Use করো?
+
+---
+
+### 🔑 DRF = Django REST Framework:
+
+```python
+# Without DRF — manually সব করতে হয়
+import json
+from django.http import JsonResponse
+from django.views import View
+
+class AccountView(View):
+    def get(self, request, account_id):
+        try:
+            account = Account.objects.get(account_id=account_id)
+            # Manually serialize করো
+            data = {
+                "account_id": account.account_id,
+                "name": account.name,
+                "balance": str(account.balance),  # Decimal manually handle
+            }
+            return JsonResponse(data)
+        except Account.DoesNotExist:
+            return JsonResponse({"error": "Not found"}, status=404)
+
+    def post(self, request):
+        # Manually parse request body
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+        # Manually validate
+        if not data.get("name"):
+            return JsonResponse({"error": "Name required"}, status=400)
+        # ...আরো অনেক কিছু manually 😫
+
+
+# With DRF — সব ready ✅
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+
+class AccountView(APIView):
+    def get(self, request, account_id):
+        account = get_object_or_404(Account, account_id=account_id)
+        serializer = AccountSerializer(account)
+        return Response(serializer.data)   # ✅ Auto JSON
+
+    def post(self, request):
+        serializer = AccountSerializer(data=request.data)
+        if serializer.is_valid():          # ✅ Auto validation
+            serializer.save()
+            return Response(serializer.data, status=201)
+        return Response(serializer.errors, status=400)
+```
+
+---
+
+### 📊 DRF কী কী দেয়:
+
+| Feature | DRF | Without DRF |
+|---|---|---|
+| Serialization | ✅ Auto | ❌ Manual |
+| Validation | ✅ Built-in | ❌ Manual |
+| Authentication | ✅ Multiple | ❌ Manual |
+| Permissions | ✅ Class-based | ❌ Manual |
+| Pagination | ✅ Built-in | ❌ Manual |
+| Browsable API | ✅ GUI | ❌ না |
+| Content Negotiation | ✅ Auto | ❌ Manual |
+| Throttling | ✅ Built-in | ❌ Manual |
+
+---
+
+## ৪. APIView vs GenericAPIView
+
+---
+
+### 💻 APIView — Full Control:
+
+```python
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+
+class AccountListView(APIView):
+    """সব manually করতে হয় — কিন্তু full control"""
+
+    def get(self, request):
+        accounts = Account.objects.filter(is_active=True)
+        serializer = AccountSerializer(accounts, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = AccountSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=201)
+        return Response(serializer.errors, status=400)
+
+
+class AccountDetailView(APIView):
+
+    def get_object(self, account_id):
+        try:
+            return Account.objects.get(account_id=account_id)
+        except Account.DoesNotExist:
+            raise Http404
+
+    def get(self, request, account_id):
+        account = self.get_object(account_id)
+        serializer = AccountSerializer(account)
+        return Response(serializer.data)
+
+    def put(self, request, account_id):
+        account = self.get_object(account_id)
+        serializer = AccountSerializer(account, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
+
+    def delete(self, request, account_id):
+        account = self.get_object(account_id)
+        account.delete()
+        return Response(status=204)
+```
+
+---
+
+### 💻 GenericAPIView — Mixins দিয়ে DRY:
+
+```python
+from rest_framework.generics import (
+    ListCreateAPIView,
+    RetrieveUpdateDestroyAPIView,
+    ListAPIView,
+    CreateAPIView,
+    RetrieveAPIView,
+    UpdateAPIView,
+    DestroyAPIView,
+)
+
+# List + Create — দুটো method একটা class-এ ✅
+class AccountListCreateView(ListCreateAPIView):
+    queryset = Account.objects.filter(is_active=True)
+    serializer_class = AccountSerializer
+    permission_classes = [IsAuthenticated]
+
+    # Override করে customize করা যায়
+    def get_queryset(self):
+        # নিজের account শুধু দেখাও
+        return Account.objects.filter(
+            user=self.request.user,
+            is_active=True
+        )
+
+    def perform_create(self, serializer):
+        # Save-এর সময় extra data যোগ করো
+        serializer.save(
+            user=self.request.user,
+            created_by=self.request.user.username
+        )
+
+
+# Retrieve + Update + Delete
+class AccountDetailView(RetrieveUpdateDestroyAPIView):
+    queryset = Account.objects.all()
+    serializer_class = AccountSerializer
+    lookup_field = "account_id"   # pk-র বদলে account_id দিয়ে খুঁজবে
+
+    def perform_destroy(self, instance):
+        # Hard delete না — soft delete করো
+        instance.is_active = False
+        instance.save()
+```
+
+---
+
+### 📊 Generic Views — কোনটা কী:
+
+| Class | Methods | কখন |
+|---|---|---|
+| `ListAPIView` | GET (list) | শুধু list |
+| `CreateAPIView` | POST | শুধু create |
+| `RetrieveAPIView` | GET (detail) | শুধু detail |
+| `UpdateAPIView` | PUT/PATCH | শুধু update |
+| `DestroyAPIView` | DELETE | শুধু delete |
+| `ListCreateAPIView` | GET + POST | List + Create |
+| `RetrieveUpdateDestroyAPIView` | GET+PUT+DELETE | Detail + Update + Delete |
+
+---
+
+## ৫. ViewSet vs APIView
+
+---
+
+### 💻 APIView — প্রতিটা URL আলাদা:
+
+```python
+# Views
+class AccountListView(APIView): ...      # GET /accounts/
+class AccountDetailView(APIView): ...    # GET /accounts/{id}/
+class AccountCreateView(APIView): ...    # POST /accounts/
+
+# URLs — manually লিখতে হয়
+urlpatterns = [
+    path("accounts/", AccountListView.as_view()),
+    path("accounts/create/", AccountCreateView.as_view()),
+    path("accounts/<str:id>/", AccountDetailView.as_view()),
+]
+```
+
+---
+
+### 💻 ViewSet — একটা Class-এ সব:
+
+```python
+from rest_framework.viewsets import ModelViewSet, ViewSet
+from rest_framework.decorators import action
+from rest_framework.response import Response
+
+class AccountViewSet(ModelViewSet):
+    """CRUD সব এক জায়গায় ✅"""
+    queryset = Account.objects.all()
+    serializer_class = AccountSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = "account_id"
+
+    # list()    → GET /accounts/
+    # create()  → POST /accounts/
+    # retrieve()→ GET /accounts/{id}/
+    # update()  → PUT /accounts/{id}/
+    # destroy() → DELETE /accounts/{id}/
+    # সব automatically আছে ✅
+
+    # Custom action — extra endpoint
+    @action(detail=True, methods=["post"])
+    def deposit(self, request, account_id=None):
+        account = self.get_object()
+        amount = request.data.get("amount")
+        account.balance += amount
+        account.save()
+        return Response({"balance": account.balance})
+    # → POST /accounts/{id}/deposit/
+
+    @action(detail=True, methods=["get"])
+    def statement(self, request, account_id=None):
+        account = self.get_object()
+        txns = account.transactions.all()
+        serializer = TransactionSerializer(txns, many=True)
+        return Response(serializer.data)
+    # → GET /accounts/{id}/statement/
+
+    def get_serializer_class(self):
+        # Action অনুযায়ী আলাদা serializer
+        if self.action == "list":
+            return AccountListSerializer
+        return AccountDetailSerializer
+
+    def get_permissions(self):
+        # Action অনুযায়ী আলাদা permission
+        if self.action == "destroy":
+            return [IsAdminUser()]
+        return [IsAuthenticated()]
+
+
+# Router — URLs automatically তৈরি হয় ✅
+from rest_framework.routers import DefaultRouter
+
+router = DefaultRouter()
+router.register("accounts", AccountViewSet)
+
+urlpatterns = [
+    path("api/", include(router.urls)),
+]
+
+# Generates:
+# GET    /api/accounts/              → list
+# POST   /api/accounts/              → create
+# GET    /api/accounts/{id}/         → retrieve
+# PUT    /api/accounts/{id}/         → update
+# PATCH  /api/accounts/{id}/         → partial_update
+# DELETE /api/accounts/{id}/         → destroy
+# POST   /api/accounts/{id}/deposit/ → deposit (custom)
+# GET    /api/accounts/{id}/statement/→ statement (custom)
+```
+
+---
+
+### 📊 APIView vs ViewSet:
+
+| | APIView | ViewSet |
+|---|---|---|
+| **Control** | ✅ Full | মাঝারি |
+| **Code** | বেশি | কম ✅ |
+| **URL** | Manual | Router auto ✅ |
+| **Custom logic** | ✅ সহজ | `@action` দিয়ে |
+| **Standard CRUD** | Repetitive | ✅ Built-in |
+| **Complex API** | ✅ Better | কঠিন |
+
+---
+
+## ৬. Serializer vs ModelSerializer
+
+---
+
+### 💻 Serializer — সব manually:
+
+```python
+from rest_framework import serializers
+
+class AccountSerializer(serializers.Serializer):
+    # প্রতিটা field manually define করতে হয়
+    account_id = serializers.CharField(max_length=20)
+    name = serializers.CharField(max_length=100)
+    balance = serializers.DecimalField(max_digits=15, decimal_places=2)
+    is_active = serializers.BooleanField(default=True)
+
+    def create(self, validated_data):
+        # Manually create করতে হয়
+        return Account.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        # Manually update করতে হয়
+        instance.name = validated_data.get("name", instance.name)
+        instance.balance = validated_data.get("balance", instance.balance)
+        instance.save()
+        return instance
+```
+
+---
+
+### 💻 ModelSerializer — Auto:
+
+```python
+class AccountSerializer(serializers.ModelSerializer):
+    # Model থেকে automatically field নেয়
+    class Meta:
+        model = Account
+        fields = ["account_id", "name", "balance", "is_active"]
+        read_only_fields = ["account_id", "created_at"]
+        extra_kwargs = {
+            "balance": {"min_value": 0},
+            "name": {"min_length": 2}
+        }
+    # create() আর update() automatically আছে ✅
+
+
+# Nested Serializer
+class TransactionSerializer(serializers.ModelSerializer):
+    # Related object-এর data include করো
+    account = AccountSerializer(read_only=True)
+    account_id = serializers.CharField(write_only=True)
+
+    class Meta:
+        model = Transaction
+        fields = ["id", "account", "account_id", "amount", "txn_type"]
+
+
+# Custom Field
+class AccountDetailSerializer(serializers.ModelSerializer):
+    # Computed field — Model-এ নেই
+    full_name = serializers.SerializerMethodField()
+    transaction_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Account
+        fields = ["account_id", "full_name", "balance", "transaction_count"]
+
+    def get_full_name(self, obj):
+        return f"{obj.first_name} {obj.last_name}"
+
+    def get_transaction_count(self, obj):
+        return obj.transactions.count()
+```
+
+---
+
+### 📊 Serializer vs ModelSerializer:
+
+| | Serializer | ModelSerializer |
+|---|---|---|
+| **Field define** | Manual | Auto from Model ✅ |
+| **create/update** | Manual | Auto ✅ |
+| **Validation** | Manual | Auto ✅ |
+| **Flexibility** | ✅ বেশি | কম |
+| **Non-model data** | ✅ | ❌ |
+| **Code** | বেশি | কম ✅ |
+
+---
+
+## ৭. Validation কোথায় করা উচিত?
+
+---
+
+### 🔑 Validation-এর ৩টা স্তর:
+
+```
+Request আসলো
+     ↓
+1. Serializer Validation  ← Data format, type, constraint
+     ↓
+2. Business Logic Validation ← Banking rules
+     ↓
+3. Database Constraint   ← Last resort, DB-level
+```
+
+---
+
+### 💻 স্তর ১ — Serializer Validation:
+
+```python
+class WithdrawSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=15, decimal_places=2)
+    pin = serializers.CharField(min_length=4, max_length=6)
+    note = serializers.CharField(required=False, max_length=200)
+
+    # Field-level validation
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError(
+                "Amount must be positive"
+            )
+        if value > 500000:
+            raise serializers.ValidationError(
+                "Single transaction limit 5 lakh BDT"
+            )
+        return value
+
+    def validate_pin(self, value):
+        if not value.isdigit():
+            raise serializers.ValidationError("PIN must be numeric")
+        return value
+
+    # Object-level validation — multiple fields একসাথে
+    def validate(self, attrs):
+        amount = attrs.get("amount")
+        pin = attrs.get("pin")
+
+        # PIN verify করো
+        user = self.context["request"].user
+        if not user.check_pin(pin):
+            raise serializers.ValidationError({
+                "pin": "Invalid PIN"
+            })
+
+        return attrs
+```
+
+---
+
+### 💻 স্তর ২ — Business Logic Validation:
+
+```python
+class WithdrawView(APIView):
+
+    def post(self, request, account_id):
+        # Serializer validation আগে
+        serializer = WithdrawSerializer(
+            data=request.data,
+            context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        amount = serializer.validated_data["amount"]
+
+        # Business logic validation — View বা Service-এ
+        account = Account.objects.get(account_id=account_id)
+
+        # Rule 1: Balance check
+        if account.balance < amount:
+            raise InsufficientBalanceError(
+                account_id, amount, account.balance
+            )
+
+        # Rule 2: Daily limit check
+        today_total = Transaction.objects.filter(
+            account=account,
+            txn_type="DR",
+            created_at__date=today()
+        ).aggregate(Sum("amount"))["amount__sum"] or 0
+
+        if today_total + amount > account.daily_limit:
+            raise DailyLimitExceededError(
+                account_id,
+                account.daily_limit,
+                amount
+            )
+
+        # Rule 3: Account status check
+        if not account.is_active:
+            raise AccountFrozenError(account_id, "Account inactive")
+
+        # All good — proceed
+        with transaction.atomic():
+            account.balance -= amount
+            account.save()
+```
+
+---
+
+### 💻 স্তর ৩ — Model-level Validation:
+
+```python
+class Account(models.Model):
+    balance = models.DecimalField(
+        max_digits=15,
+        decimal_places=2
+    )
+
+    # Model-level constraint — DB-তেও enforce হয়
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(balance__gte=0),
+                name="balance_non_negative"
+            )
+        ]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.balance < 0:
+            raise ValidationError("Balance cannot be negative")
+```
+
+---
+
+### 📊 Validation কোথায় কী:
+
+| Validation Type | কোথায় | উদাহরণ |
+|---|---|---|
+| **Format/Type** | Serializer field | amount > 0, PIN numeric |
+| **Cross-field** | Serializer `validate()` | PIN verify |
+| **Business Rule** | View/Service | Daily limit, balance check |
+| **Data Integrity** | Model `clean()` | Balance >= 0 |
+| **DB Constraint** | Model `Meta.constraints` | Last resort |
+
+---
+
+### 🎯 Interview Closing line:
+
+> *"Validation তিনটা স্তরে রাখি — Serializer-এ data format আর type, View বা Service layer-এ banking business rules, Model-এ data integrity constraint। Migration দিয়ে schema changes version control করি — production-এ কোনো manual SQL লাগে না। Signal use করি transaction notification আর audit log-এর জন্য, তবে heavy কাজ Celery-তে পাঠাই যাতে request block না হয়। ViewSet আর Router দিয়ে standard CRUD-এ code অনেক কমে যায়।"*
+
+---
+
+পরের গুরুত্বপূর্ণ topics:
+- **Database Indexing + Transaction**
+- **REST API Design Best Practices**
+- **SOLID Principles**
+- **Design Patterns — Singleton, Factory, Repository**
+- **Celery + Redis**
+
+কোনটা নিয়ে আগাবে?
