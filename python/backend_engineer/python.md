@@ -7447,3 +7447,203 @@ SavingsAccount আর CurrentAccount — দুটোই Account-এর subtype
 ---
 
 চাও হলে আমি এখন **LSP vs OCP vs SRP** comparison-ও same style-এ দিতে পারি।
+
+
+একই interview-ready style-এ **Interface Segregation Principle (ISP)** নিচে দিলাম 👇
+
+---
+
+# 🧠 Interface Segregation Principle (ISP)
+
+---
+
+## 🔑 এক কথায়:
+
+> **Client-কে এমন interface implement করতে বাধ্য করা যাবে না যেগুলো তার দরকার নেই**
+
+---
+
+## 🧠 সহজভাবে:
+
+```text
+❌ "একটা বড় interface — সব implement করো"
+✅ "ছোট ছোট interface — যা দরকার শুধু সেটা implement করো"
+```
+
+---
+
+# 🧩 Definition
+
+> *"Clients should not be forced to depend on methods they do not use."*
+
+---
+
+# ❌ Wrong Design (Fat Interface)
+
+```python
+class Worker:
+    def work(self): pass
+    def eat(self): pass
+    def sleep(self): pass
+
+
+class Robot(Worker):
+    def work(self): print("Working")
+
+    def eat(self): pass     # ❌ useless
+    def sleep(self): pass   # ❌ useless
+```
+
+---
+
+## সমস্যা:
+
+```text
+Robot-কে eat/sleep implement করতে হচ্ছে
+যেটা তার দরকারই নেই ❌
+→ unnecessary dependency
+→ bad design
+```
+
+---
+
+# ✅ Correct Design (Segregated Interfaces)
+
+```python
+class Workable:
+    def work(self): pass
+
+class Eatable:
+    def eat(self): pass
+
+class Sleepable:
+    def sleep(self): pass
+
+
+class Human(Workable, Eatable, Sleepable):
+    def work(self): print("Working")
+    def eat(self): print("Eating")
+    def sleep(self): print("Sleeping")
+
+
+class Robot(Workable):
+    def work(self): print("Working")
+```
+
+---
+
+## এখানে কী হলো:
+
+```text
+✅ Human → সব behavior implement করলো
+✅ Robot → শুধু দরকারি method implement করলো
+✅ unnecessary dependency নাই
+```
+
+---
+
+# 🧠 Key Idea
+
+```text
+Fat interface ❌
+Small, specific interface ✅
+```
+
+---
+
+# 🏦 Real Banking Example
+
+---
+
+## ❌ Wrong:
+
+```python
+class PaymentService:
+    def pay(self): pass
+    def refund(self): pass
+    def generate_report(self): pass
+
+
+class BkashPayment(PaymentService):
+    def pay(self): pass
+    def refund(self): pass
+    def generate_report(self): pass   # ❌ maybe not needed
+```
+
+---
+
+## ✅ Correct:
+
+```python
+class Payable:
+    def pay(self): pass
+
+class Refundable:
+    def refund(self): pass
+
+class Reportable:
+    def generate_report(self): pass
+
+
+class BkashPayment(Payable, Refundable):
+    def pay(self): pass
+    def refund(self): pass
+
+
+class AdminReportService(Reportable):
+    def generate_report(self): pass
+```
+
+---
+
+# ⚖️ ISP vs SRP (Common confusion)
+
+| Principle | Focus                   |
+| --------- | ----------------------- |
+| SRP       | class-এর responsibility |
+| ISP       | interface-এর design     |
+
+---
+
+# ⚠️ ISP Violation Signs
+
+```text
+❌ class-এ অনেক method কিন্তু সব use হয় না
+❌ empty method (pass) লিখতে হচ্ছে
+❌ NotImplementedError দিতে হচ্ছে
+❌ client unnecessary dependency নিচ্ছে
+```
+
+---
+
+# 🎯 Interview Line
+
+> *"Interface Segregation Principle suggests that instead of having a large, general-purpose interface, we should create smaller, specific interfaces so that clients only depend on what they actually use."*
+
+---
+
+# 🚀 One-line memory trick
+
+> **"Don’t force a class to implement what it doesn’t need."**
+
+---
+
+## 🚀 Pro Tip (UCB interview killer)
+
+👉 যদি interviewer জিজ্ঞেস করে:
+**"Why ISP is important?"**
+
+তুমি বলবে:
+
+> *"Because it reduces unnecessary coupling, improves readability, and makes the system easier to maintain by keeping interfaces small and focused."*
+
+---
+
+চাও হলে next:
+
+* LSP vs ISP vs DIP comparison (🔥 tricky)
+* Clean Architecture
+* Repository pattern
+* Middleware (Django/FastAPI)
+
+বললেই next level prep 🚀
