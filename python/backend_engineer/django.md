@@ -5828,3 +5828,641 @@ if __name__ == "__main__":
 - **PostgreSQL + ORM** — database queries
 
 কোনটা নিয়ে আগাবে?
+
+## Docker + Django Deployment — UCB Interview Prep
+
+---
+
+## ১. Docker কীভাবে Use করো
+
+> **এক কথায়:** Docker = আপনার app-কে একটা **box** (container)-এ ভরো — সেই box যেকোনো machine-এ একইভাবে চলবে। "Works on my machine" সমস্যা শেষ।
+
+```
+Without Docker:
+  Dev machine: Python 3.9, Django 4.2 ✅
+  Server:      Python 3.7, Django 3.1 ❌ — crash!
+
+With Docker:
+  Container-এ Python 3.9 + Django 4.2 pack করা আছে
+  যেখানেই run করো — same result ✅
+```
+
+**Dockerfile — Django app-এর জন্য:**
+```dockerfile
+# Dockerfile
+FROM python:3.11-slim          # Base image — Python 3.11
+
+WORKDIR /app                   # Container-এর ভেতরে working directory
+
+# Dependencies আগে copy করো (cache efficiency)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Code copy করো
+COPY . .
+
+# Static files collect করো
+RUN python manage.py collectstatic --noinput
+
+# Port expose করো
+EXPOSE 8000
+
+# App start করো
+CMD ["gunicorn", "myproject.wsgi:application", "--bind", "0.0.0.0:8000"]
+```
+
+**docker-compose.yml — সব service একসাথে:**
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+
+  # Django App
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=False
+      - DATABASE_URL=postgresql://user:pass@db:5432/ucbdb
+      - SECRET_KEY=your-secret-key
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - static_files:/app/staticfiles
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ucbdb
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Redis (cache + celery broker)
+  redis:
+    image: redis:7-alpine
+
+  # Nginx (reverse proxy)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - static_files:/app/staticfiles
+    depends_on:
+      - web
+
+volumes:
+  postgres_data:
+  static_files:
+```
+
+**Common Commands:**
+```bash
+# Build + start সব service
+docker-compose up --build
+
+# Background-এ চালাও
+docker-compose up -d
+
+# Log দেখো
+docker-compose logs -f web
+
+# Container-এর ভেতরে ঢোকো
+docker-compose exec web bash
+
+# Migration run করো
+docker-compose exec web python manage.py migrate
+
+# Stop করো
+docker-compose down
+```
+
+---
+
+## ২. Django Deploy — Step by Step
+
+**Production settings.py:**
+```python
+# settings/production.py
+import os
+
+DEBUG = False   # ← Production-এ সবসময় False!
+
+ALLOWED_HOSTS = ['ucb.com.bd', 'www.ucb.com.bd', 'api.ucb.com.bd']
+
+# Database — environment variable থেকে নাও
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ['DB_NAME'],
+        'USER': os.environ['DB_USER'],
+        'PASSWORD': os.environ['DB_PASSWORD'],
+        'HOST': os.environ['DB_HOST'],
+        'PORT': '5432',
+    }
+}
+
+# Static files
+STATIC_URL = '/static/'
+STATIC_ROOT = '/app/staticfiles'   # collectstatic এখানে দেবে
+MEDIA_ROOT = '/app/media'
+
+# Security headers (নিচে বিস্তারিত)
+SECURE_SSL_REDIRECT = True
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+SECURE_HSTS_SECONDS = 31536000
+
+# Logging
+LOGGING = {
+    'version': 1,
+    'handlers': {
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': '/app/logs/django.log',
+        },
+    },
+    'root': {
+        'handlers': ['file'],
+        'level': 'WARNING',
+    },
+}
+```
+
+**Deploy Checklist:**
+```bash
+# ১. Code pull করো
+git pull origin main
+
+# ২. Dependencies install
+pip install -r requirements.txt
+
+# ৩. Database migration
+python manage.py migrate
+
+# ৪. Static files collect
+python manage.py collectstatic --noinput
+
+# ৫. Gunicorn restart
+systemctl restart gunicorn
+
+# ৬. Nginx reload
+systemctl reload nginx
+```
+
+---
+
+## ৩. Gunicorn কী?
+
+> **এক কথায়:** Django-র built-in server (`runserver`) production-এর জন্য না। Gunicorn হলো **production-grade WSGI server** যেটা multiple worker দিয়ে Django-কে চালায়।
+
+```
+Problem:
+  Django runserver = single-threaded, একবারে একটাই request
+  1000 user → 999 জন wait করবে 😱
+
+Solution — Gunicorn:
+  4 workers = একসাথে 4টা request handle
+  8 workers = একসাথে 8টা
+  Formula: workers = (2 × CPU cores) + 1
+```
+
+**Gunicorn Configuration:**
+```python
+# gunicorn.conf.py
+import multiprocessing
+
+# Workers — CPU core অনুযায়ী
+workers = multiprocessing.cpu_count() * 2 + 1  # 4 core → 9 workers
+
+# Async worker (I/O heavy হলে)
+worker_class = "gevent"     # sync, gevent, uvicorn.workers.UvicornWorker
+
+# Connection per worker
+worker_connections = 1000
+
+# Timeout
+timeout = 30               # 30s-এর বেশি লাগলে kill করো
+
+# Binding
+bind = "0.0.0.0:8000"
+
+# Logging
+accesslog = "/app/logs/gunicorn_access.log"
+errorlog = "/app/logs/gunicorn_error.log"
+loglevel = "warning"
+
+# Process name
+proc_name = "ucb_api"
+```
+
+**systemd service file:**
+```ini
+# /etc/systemd/system/gunicorn.service
+[Unit]
+Description=UCB Django Gunicorn
+After=network.target
+
+[Service]
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/app
+ExecStart=/app/venv/bin/gunicorn \
+    --config /app/gunicorn.conf.py \
+    myproject.wsgi:application
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**FastAPI হলে Uvicorn + Gunicorn:**
+```bash
+# FastAPI (ASGI) — Uvicorn workers দিয়ে Gunicorn
+gunicorn main:app \
+  --workers 4 \
+  --worker-class uvicorn.workers.UvicornWorker \
+  --bind 0.0.0.0:8000
+```
+
+---
+
+## ৪. Nginx Role কী?
+
+> **এক কথায়:** Nginx হলো **reverse proxy + static file server**। Internet থেকে request আসে Nginx-এ, Nginx সেটা Gunicorn-এ পাঠায়। Static files (CSS, JS, images) Nginx নিজেই serve করে — Django-কে জিজ্ঞেস করে না।
+
+```
+Internet
+   ↓
+Nginx (port 80/443)
+   ├── /static/* → নিজেই serve করে (fast!) ✅
+   ├── /media/*  → নিজেই serve করে ✅
+   └── /* (API) → Gunicorn:8000 → Django
+```
+
+**Nginx Config:**
+```nginx
+# /etc/nginx/sites-available/ucb
+upstream django_app {
+    server 127.0.0.1:8000;   # Gunicorn
+    # Scaling হলে multiple servers:
+    # server 127.0.0.1:8001;
+    # server 127.0.0.1:8002;
+}
+
+server {
+    listen 80;
+    server_name api.ucb.com.bd;
+
+    # HTTP → HTTPS redirect
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name api.ucb.com.bd;
+
+    # SSL Certificate
+    ssl_certificate     /etc/letsencrypt/live/api.ucb.com.bd/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.ucb.com.bd/privkey.pem;
+
+    # Static files — Django-কে bypass করো
+    location /static/ {
+        alias /app/staticfiles/;
+        expires 30d;             # Browser 30 দিন cache করবে
+        add_header Cache-Control "public, immutable";
+    }
+
+    location /media/ {
+        alias /app/media/;
+    }
+
+    # API requests → Gunicorn
+    location / {
+        proxy_pass http://django_app;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Timeout
+        proxy_connect_timeout 30s;
+        proxy_read_timeout    30s;
+
+        # File upload size limit
+        client_max_body_size 10M;
+    }
+
+    # Rate limiting
+    limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+    location /api/ {
+        limit_req zone=api burst=20 nodelay;
+        proxy_pass http://django_app;
+    }
+}
+```
+
+---
+
+## ৫. Scaling কীভাবে করো?
+
+**৩ ধরনের Scaling:**
+
+```
+Vertical Scaling (Scale Up):
+  Server-এর RAM/CPU বাড়াও
+  Simple কিন্তু limit আছে, expensive
+
+Horizontal Scaling (Scale Out):
+  আরো server যোগ করো
+  Load Balancer সব server-এ traffic ভাগ করে
+  Best for microservices ✅
+
+Auto Scaling:
+  Traffic বাড়লে automatically server বাড়াও
+  কমলে কমাও (AWS Auto Scaling, K8s HPA)
+```
+
+**Django-র জন্য Horizontal Scaling:**
+```python
+# Stateless করো — session DB/Redis-এ রাখো, server-এ না
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+SESSION_CACHE_ALIAS = 'default'
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://redis:6379/1",
+    }
+}
+
+# Celery — background tasks আলাদা worker-এ
+# settings.py
+CELERY_BROKER_URL = 'redis://redis:6379/0'
+CELERY_RESULT_BACKEND = 'redis://redis:6379/0'
+```
+
+```python
+# tasks.py — Payment notification background-এ
+from celery import shared_task
+
+@shared_task
+def send_payment_notification(txn_id: str, phone: str, amount: float):
+    """এই task আলাদা Celery worker-এ চলবে"""
+    sms_service.send(phone, f"TXN {txn_id}: {amount} BDT debited")
+    email_service.send(...)
+
+# views.py
+@api_view(['POST'])
+def transfer(request):
+    txn_id = process_payment(request.data)
+
+    # Background-এ পাঠাও — user wait করবে না
+    send_payment_notification.delay(txn_id, phone, amount)
+
+    return Response({"txn_id": txn_id, "status": "success"})
+```
+
+**docker-compose scale:**
+```bash
+# Web service 3 instance চালাও
+docker-compose up --scale web=3
+
+# Nginx এখন 3টা Gunicorn instance-এ load balance করবে
+```
+
+---
+
+## ৬. Security Best Practices
+
+```python
+# settings.py — Security checklist
+
+# ১. Secret key environment variable থেকে
+SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
+
+# ২. Debug সবসময় False
+DEBUG = False
+
+# ৩. HTTPS enforce করো
+SECURE_SSL_REDIRECT = True
+SECURE_HSTS_SECONDS = 31536000      # 1 year
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+
+# ৪. Cookies secure করো
+SESSION_COOKIE_SECURE = True        # HTTPS ছাড়া cookie যাবে না
+CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_HTTPONLY = True      # JS access করতে পারবে না
+SESSION_COOKIE_AGE = 1800           # 30 min idle timeout
+
+# ৫. Clickjacking prevent
+X_FRAME_OPTIONS = 'DENY'
+
+# ৬. Content type sniffing prevent
+SECURE_CONTENT_TYPE_NOSNIFF = True
+
+# ৭. Allowed hosts strict করো
+ALLOWED_HOSTS = ['api.ucb.com.bd']  # * দেবে না কখনো!
+```
+
+---
+
+## ৭. SQL Injection Prevent
+
+> **কী হয়:** User input সরাসরি SQL query-তে দিলে attacker ক্ষতিকর SQL inject করতে পারে।
+
+```python
+# ❌ DANGEROUS — কখনো করবে না
+account_id = request.GET.get('id')
+query = f"SELECT * FROM accounts WHERE id = {account_id}"
+cursor.execute(query)
+
+# Attacker input দিলে: id = "1 OR 1=1"
+# Query হয়: SELECT * FROM accounts WHERE id = 1 OR 1=1
+# → সব accounts দেখা যাবে! 😱
+
+# ❌ আরো dangerous:
+# id = "1; DROP TABLE accounts; --"
+# → পুরো table delete! 💀
+
+# ✅ SAFE — Django ORM use করো (parameterized query)
+account = Account.objects.get(id=account_id)
+# Django automatically: WHERE id = %s → (account_id,)
+# Injection impossible ✅
+
+# ✅ Raw SQL লাগলে parameterized করো
+cursor.execute(
+    "SELECT * FROM accounts WHERE id = %s AND user_id = %s",
+    [account_id, user_id]    # ← values আলাদা দাও, string concatenate করো না
+)
+
+# ✅ Django ORM filter — সবসময় safe
+accounts = Account.objects.filter(
+    user=request.user,
+    status='active'
+).select_related('branch')
+```
+
+**Input Validation:**
+```python
+from django.core.validators import RegexValidator
+from rest_framework import serializers
+
+class TransferSerializer(serializers.Serializer):
+    account_number = serializers.CharField(
+        max_length=13,
+        validators=[RegexValidator(r'^\d{13}$', 'Invalid account number')]
+    )
+    amount = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=1,
+        max_value=1000000
+    )
+
+    def validate_amount(self, value):
+        # Extra business logic validation
+        if value > self.context['request'].user.daily_limit:
+            raise serializers.ValidationError("Daily limit exceeded")
+        return value
+```
+
+---
+
+## ৮. XSS এবং CSRF
+
+### XSS (Cross-Site Scripting)
+
+> **কী হয়:** Attacker malicious JavaScript inject করে — অন্য user-এর browser-এ সেটা execute হয়।
+
+```python
+# ❌ XSS vulnerable
+def get_greeting(request):
+    name = request.GET.get('name')
+    return HttpResponse(f"<h1>Hello {name}</h1>")
+
+# Attacker URL: /greet?name=<script>document.cookie</script>
+# → victim-এর browser-এ script চলবে, cookie চুরি হবে! 😱
+
+# ✅ Django template — auto-escape করে
+# templates/greet.html
+# <h1>Hello {{ name }}</h1>  ← Django {{ }} auto-escape করে
+# <script> → &lt;script&gt; হয়ে যায়
+
+# ✅ DRF — JSON response-এ XSS কাজ করে না
+return Response({"message": f"Hello {name}"})
+
+# ⚠️ mark_safe() কখনো user input-এ দেবে না
+# return mark_safe(f"<b>{user_input}</b>")  ← DANGEROUS!
+
+# ✅ Content Security Policy header (Nginx-এ)
+# add_header Content-Security-Policy "default-src 'self'";
+```
+
+### CSRF (Cross-Site Request Forgery)
+
+> **কী হয়:** Attacker অন্য website থেকে victim-এর logged-in session ব্যবহার করে request পাঠায়।
+
+```
+Attack scenario:
+  ১. Victim UCB internet banking-এ logged in
+  ২. Attacker একটা ফাঁদ page বানালো:
+     <form action="https://ucb.com.bd/transfer" method="POST">
+       <input name="to_account" value="attacker_account">
+       <input name="amount" value="50000">
+     </form>
+     <script>document.forms[0].submit()</script>
+  ৩. Victim সেই page visit করলে — automatically transfer হয়ে যাবে 😱
+     (victim-এর browser তার cookie পাঠাবে)
+```
+
+```python
+# Django CSRF protection — built-in!
+
+# settings.py
+MIDDLEWARE = [
+    'django.middleware.csrf.CsrfViewMiddleware',  # ← এটা enable রাখো
+    ...
+]
+
+# Template-এ:
+# <form method="post">
+#   {% csrf_token %}   ← এই line বাদ দিলে 403 error
+#   ...
+# </form>
+
+# DRF (API) — JWT use করলে CSRF automatically safe
+# কারণ JWT localStorage-এ থাকে, cookie-তে না
+# তবু SessionAuthentication use করলে CSRF লাগবে:
+
+# views.py
+from rest_framework.authentication import SessionAuthentication
+from rest_framework.permissions import IsAuthenticated
+
+class TransferView(APIView):
+    authentication_classes = [SessionAuthentication]  # CSRF enforce করে
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # request.data['csrfmiddlewaretoken'] verify হয়েছে
+        ...
+
+# ✅ CORS properly configure করো (cross-origin API call-এর জন্য)
+# pip install django-cors-headers
+
+CORS_ALLOWED_ORIGINS = [
+    "https://ucb.com.bd",
+    "https://app.ucb.com.bd",
+]
+# CORS_ALLOW_ALL_ORIGINS = True  ← কখনো না! production-এ
+```
+
+---
+
+## 🎯 Complete Architecture Summary
+
+```
+Internet
+   ↓
+Nginx (SSL, Rate Limit, Static Files)
+   ↓
+Gunicorn (4 workers, WSGI)
+   ↓
+Django App
+   ├── PostgreSQL (ORM — SQL injection safe)
+   ├── Redis (Session, Cache, Celery broker)
+   └── Celery Workers (async tasks — SMS, Email)
+
+Security layers:
+  ✅ HTTPS only (Nginx SSL)
+  ✅ CSRF token (Django middleware)
+  ✅ XSS escape (Django templates)
+  ✅ SQL injection proof (ORM)
+  ✅ JWT + HttpOnly cookies
+  ✅ Rate limiting (Nginx)
+  ✅ CORS restricted
+```
+
+---
+
+## 🎯 Interview Closing Lines:
+
+> *"UCB-র production deployment-এ Docker দিয়ে consistent environment নিশ্চিত করবো। Nginx HTTPS terminate করবে, static files serve করবে, rate limiting করবে। Gunicorn multiple workers দিয়ে concurrent requests handle করবে। Security-র জন্য Django ORM দিয়ে SQL injection impossible, template engine XSS escape করে, CSRF middleware সব POST protect করে। Scaling দরকার হলে Gunicorn workers বাড়াবো, তারপর horizontal scaling-এ Nginx load balancer হিসেবে multiple Django instances manage করবে।"*
+
+---
+
+পরের topics:
+- **JWT Authentication — DRF-এ implement**
+- **PostgreSQL Query Optimization — Index, N+1 problem**
+- **Django REST Framework — Serializer, ViewSet, Permission**
+- **Redis Caching — Cache strategies**
+
+কোনটা নিয়ে আগাবে?
