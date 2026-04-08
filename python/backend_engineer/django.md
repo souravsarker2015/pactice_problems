@@ -5400,7 +5400,7 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 ```
-
+![alt text](image.png)
 **Actual task implementations:**
 ```python
 # tasks.py
@@ -5542,3 +5542,289 @@ stderr_logfile=/var/log/celery/beat.err.log
 ---
 
 পরের topic কোনটা? **JWT Authentication**, **Django ORM optimization**, নাকি **REST API design**?
+
+
+
+
+
+## Microservice Architecture — UCB Bangladesh Interview Prep
+
+---
+
+### ১. Monolith vs Microservice
+
+> **এক কথায়:** Monolith = একটাই বিশাল application, সব কিছু একসাথে। Microservice = ছোট ছোট independent service, প্রতিটা নিজের কাজ করে।
+
+Banking analogy:
+```
+Monolith = একটা super-branch যেখানে
+           loan, account, card, payment — সব একই room-এ।
+           একটা বন্ধ হলে সব বন্ধ। 😰
+
+Microservice = আলাদা আলাদা department:
+           🏢 Loan Department
+           🏢 Account Department
+           🏢 Card Department
+           🏢 Payment Department
+           একটা বন্ধ হলে বাকিরা চলে। ✅
+```---
+
+![alt text](image-2.png)
+
+
+### ২. API Gateway কী?
+
+> **এক কথায়:** API Gateway হলো **single entry point** — সব request প্রথমে এখানে আসে, তারপর সঠিক service-এ যায়।
+
+```
+Client → API Gateway → Account Service
+                    → Payment Service
+                    → Loan Service
+                    → Notification Service
+```
+
+**API Gateway যা করে:**
+```
+✅ Routing          → /accounts → Account Service
+✅ Authentication   → JWT token verify
+✅ Rate Limiting    → 100 req/min per user
+✅ Load Balancing   → Traffic distribute করো
+✅ SSL Termination  → HTTPS handle করো
+✅ Logging          → সব request log করো
+```
+
+**Python-এ (FastAPI + Manual Gateway):**
+```python
+# api_gateway/main.py
+from fastapi import FastAPI, Request, HTTPException
+import httpx
+
+app = FastAPI()
+
+# Service registry
+SERVICES = {
+    "accounts":      "http://account-service:8001",
+    "payments":      "http://payment-service:8002",
+    "loans":         "http://loan-service:8003",
+    "notifications": "http://notification-service:8004",
+}
+
+@app.api_route("/{service}/{path:path}", methods=["GET","POST","PUT","DELETE"])
+async def gateway(service: str, path: str, request: Request):
+    # ১. Service exist করে?
+    if service not in SERVICES:
+        raise HTTPException(404, f"Service '{service}' not found")
+
+    # ২. Auth check (JWT verify)
+    token = request.headers.get("Authorization")
+    if not token:
+        raise HTTPException(401, "Token required")
+
+    # ৩. Downstream service-এ forward করো
+    target_url = f"{SERVICES[service]}/{path}"
+
+    async with httpx.AsyncClient() as client:
+        response = await client.request(
+            method=request.method,
+            url=target_url,
+            headers=dict(request.headers),
+            content=await request.body(),
+        )
+
+    return response.json()
+
+# UCB Example:
+# GET /accounts/balance/123   → account-service:8001/balance/123
+# POST /payments/transfer     → payment-service:8002/transfer
+# GET /loans/status/456       → loan-service:8003/status/456
+```
+
+---
+
+### ৩. Service Communication — Synchronous vs Asynchronous
+
+```
+দুটো উপায়:
+
+১. Synchronous (REST/gRPC) → direct call, জবাব wait করো
+   Payment → [HTTP] → Account → জবাব দাও → Payment continue
+
+২. Asynchronous (Message Broker) → message পাঠাও, চলে যাও
+   Payment → [RabbitMQ] → Queue → Notification Service পড়বে যখন পারবে
+```
+
+---
+
+### ৪. Message Broker কেন দরকার? (RabbitMQ)
+
+> **Real problem:** Payment হওয়ার পর SMS, Email, Push notification — ৩টা কাজ। Synchronous-এ করলে payment আটকে থাকবে।
+
+```
+❌ Without Message Broker:
+
+Payment Service → Account Service (100ms) → wait
+               → SMS Service (200ms) → wait
+               → Email Service (150ms) → wait
+               → Push Service (80ms) → wait
+
+Total wait: 530ms 😫 User frustrated!
+
+✅ With RabbitMQ:
+
+Payment Service → "payment.completed" → Queue → done! (5ms)
+                                          ↓
+                              SMS Service reads → sends SMS
+                              Email Service reads → sends email
+                              Push Service reads → sends push
+
+Payment response: 5ms ✅ User happy!
+```
+
+**RabbitMQ diagram:**---
+![alt text](image-1.png)
+
+### ৫. Python-এ RabbitMQ Code (pika library)
+
+**Publisher (Payment Service):**
+```python
+# payment_service/publisher.py
+import pika
+import json
+
+def publish_payment_event(payment_data: dict):
+    """Payment হলে event publish করো"""
+
+    # RabbitMQ connection
+    connection = pika.BlockingConnection(
+        pika.ConnectionParameters(host='localhost')
+    )
+    channel = connection.channel()
+
+    # Exchange declare করো (fanout = সব queue-এ যাবে)
+    channel.exchange_declare(
+        exchange='payment_events',
+        exchange_type='fanout'   # ← সব subscriber পাবে
+    )
+
+    # Message publish করো
+    message = json.dumps({
+        "event": "payment.completed",
+        "txn_id": payment_data["txn_id"],
+        "amount": payment_data["amount"],
+        "account": payment_data["account"],
+        "timestamp": "2024-01-15T10:30:00"
+    })
+
+    channel.basic_publish(
+        exchange='payment_events',
+        routing_key='',          # fanout-এ routing key লাগে না
+        body=message,
+        properties=pika.BasicProperties(
+            delivery_mode=2      # ← Message persistent (restart-এও থাকবে)
+        )
+    )
+
+    print(f"✅ Published: TXN-{payment_data['txn_id']}")
+    connection.close()
+
+# Payment API-তে ব্যবহার:
+@app.post("/transfer")
+async def transfer(request: TransferRequest):
+    # ১. DB-তে payment save করো
+    txn_id = await save_payment(request)
+
+    # ২. Event publish করো — wait করো না!
+    publish_payment_event({
+        "txn_id": txn_id,
+        "amount": request.amount,
+        "account": request.account_id
+    })
+
+    # ৩. Immediately response দাও
+    return {"status": "success", "txn_id": txn_id}
+    # SMS/Email পরে হবে — user কে wait করাচ্ছি না ✅
+```
+
+**Consumer (SMS Service):**
+```python
+# sms_service/consumer.py
+import pika
+import json
+
+def send_sms(phone: str, message: str):
+    print(f"📱 SMS sent to {phone}: {message}")
+
+def on_payment_received(ch, method, properties, body):
+    """Queue থেকে message পেলে এই function call হবে"""
+
+    data = json.loads(body)
+    print(f"📩 Received: {data['event']}")
+
+    # SMS পাঠাও
+    send_sms(
+        phone="01XXXXXXXXX",
+        message=f"TXN {data['txn_id']}: {data['amount']} BDT transferred."
+    )
+
+    # ✅ Acknowledge — RabbitMQ-কে জানাও "কাজ হয়েছে"
+    # না করলে message আবার queue-এ যাবে
+    ch.basic_ack(delivery_tag=method.delivery_tag)
+
+def start_consuming():
+    connection = pika.BlockingConnection(
+        pika.ConnectionParameters(host='localhost')
+    )
+    channel = connection.channel()
+
+    # Exchange bind করো
+    channel.exchange_declare(exchange='payment_events', exchange_type='fanout')
+
+    # SMS service-এর নিজস্ব queue
+    result = channel.queue_declare(queue='', exclusive=True)
+    queue_name = result.method.queue
+
+    channel.queue_bind(exchange='payment_events', queue=queue_name)
+
+    print("📡 SMS Service listening for payments...")
+
+    # Message আসলে on_payment_received call হবে
+    channel.basic_consume(
+        queue=queue_name,
+        on_message_callback=on_payment_received
+    )
+
+    channel.start_consuming()  # ← Infinite loop, সবসময় শুনছে
+
+if __name__ == "__main__":
+    start_consuming()
+```
+
+---
+
+### 🎯 Interview Summary Table
+
+```
+┌─────────────────┬──────────────────────────────────────────────┐
+│ Topic           │ One-liner Answer                             │
+├─────────────────┼──────────────────────────────────────────────┤
+│ Microservice    │ Independent services, আলাদা deploy/scale     │
+│ Monolith        │ Single codebase, simple কিন্তু brittle       │
+│ API Gateway     │ Single entry point — auth, route, rate limit │
+│ RabbitMQ        │ Async message queue — decoupled services     │
+│ Message Broker  │ Producer/Consumer decouple করে speed বাড়ায় │
+└─────────────────┴──────────────────────────────────────────────┘
+```
+
+### 🎯 Interview Closing line:
+
+> *"UCB-তে payment, account, notification — এগুলো আলাদা microservice হওয়া উচিত। Payment হলে RabbitMQ-তে event publish করলে — SMS, email, fraud detection সব async-এ চলে, customer অপেক্ষা করে না। API Gateway দিয়ে single endpoint থেকে সব service manage করা যায়, JWT auth একবারই handle হয়।"*
+
+---
+
+পরের topics:
+- **Docker + Docker Compose** — microservice কীভাবে run করবে
+- **Django REST Framework** — API বানানো
+- **JWT Authentication** — token-based auth
+- **PostgreSQL + ORM** — database queries
+
+কোনটা নিয়ে আগাবে?
