@@ -4148,3 +4148,521 @@ bg = BadGateway()   # TypeError: Can't instantiate abstract class!
 - **Database ORM + Query Optimization**
 
 কোনটা নিয়ে আগাবে?
+
+## Exception Handling Best Practices & Custom Exception
+
+---
+
+## ১. Exception Handling — Basics থেকে Best Practice
+
+---
+
+### 🔑 Basic Structure:
+
+```python
+try:
+    # ঝুঁকিপূর্ণ কাজ
+except SpecificException as e:
+    # নির্দিষ্ট error handle
+except AnotherException as e:
+    # আরেকটা error handle
+else:
+    # কোনো error হয়নি → এটা চলবে
+finally:
+    # error হোক বা না হোক → সবসময় চলবে
+```
+
+---
+
+### 💻 `else` আর `finally` — কীভাবে কাজ করে:
+
+```python
+def withdraw(balance, amount):
+    try:
+        if amount > balance:
+            raise ValueError("Insufficient balance")
+        balance -= amount
+
+    except ValueError as e:
+        print(f"❌ Error: {e}")
+
+    else:
+        # try সফল হলে চলে — exception হলে চলে না
+        print(f"✅ Withdrawal successful")
+        send_sms("Withdrawal done")   # success হলেই SMS
+
+    finally:
+        # সবসময় চলে — error হোক বা না হোক
+        print("📝 Transaction logged")
+        close_db_connection()         # resource cleanup
+
+withdraw(50000, 10000)
+# ✅ Withdrawal successful
+# 📝 Transaction logged
+
+withdraw(50000, 60000)
+# ❌ Error: Insufficient balance
+# 📝 Transaction logged   ← তবুও চলে
+```
+
+---
+
+### ✅ Best Practices:
+
+---
+
+**১. Broad Exception ধরা যাবে না:**
+```python
+# ❌ Bad — সব ধরে নেয়, কী হলো বোঝা যায় না
+try:
+    process_payment(amount)
+except Exception:
+    print("Something went wrong")
+
+# ✅ Good — নির্দিষ্ট exception ধরো
+try:
+    process_payment(amount)
+except ValueError as e:
+    print(f"Invalid amount: {e}")
+except ConnectionError as e:
+    print(f"DB connection failed: {e}")
+except TimeoutError as e:
+    print(f"Request timed out: {e}")
+```
+
+---
+
+**২. Bare `except` কখনো না:**
+```python
+# ❌ Worst — KeyboardInterrupt, SystemExit সব ধরে!
+try:
+    transfer_money(amount)
+except:
+    pass    # Silent failure — debugging nightmare 😱
+
+# ✅ Always specify
+try:
+    transfer_money(amount)
+except Exception as e:
+    logger.error(f"Transfer failed: {e}")
+    raise   # re-raise করো
+```
+
+---
+
+**৩. Exception চেপে রাখা যাবে না:**
+```python
+# ❌ Bad — error হলো কিন্তু কেউ জানলো না
+try:
+    debit_account("SB-001", 5000)
+except Exception:
+    pass   # 😱 Silent failure
+
+# ✅ Good — log করো, re-raise করো
+try:
+    debit_account("SB-001", 5000)
+except Exception as e:
+    logger.error(f"Debit failed: {e}", exc_info=True)
+    raise   # caller-কে জানাও
+```
+
+---
+
+**৪. Exception-এ Cleanup নিশ্চিত করো:**
+```python
+# ❌ Bad — exception হলে connection কখনো বন্ধ হবে না
+conn = get_db_connection()
+result = conn.execute(query)   # এখানে error হলে?
+conn.close()                   # এই line কখনো আসবে না 😱
+
+# ✅ Good — finally বা context manager
+try:
+    conn = get_db_connection()
+    result = conn.execute(query)
+finally:
+    conn.close()   # সবসময় বন্ধ হবে ✅
+
+# আরো ভালো — context manager
+with get_db_connection() as conn:
+    result = conn.execute(query)
+# automatically closed ✅
+```
+
+---
+
+**৫. Exception Chaining — কোথা থেকে এলো বলো:**
+```python
+# ❌ Bad — original error হারিয়ে যায়
+try:
+    user = db.get_user(user_id)
+except DatabaseError as e:
+    raise ValueError("User not found")   # original error গেল কোথায়?
+
+# ✅ Good — `from` দিয়ে chain করো
+try:
+    user = db.get_user(user_id)
+except DatabaseError as e:
+    raise ValueError("User not found") from e   # chain ✅
+
+# Output:
+# DatabaseError: connection refused
+# The above exception was the direct cause of:
+# ValueError: User not found
+```
+
+---
+
+**৬. Logging সঠিকভাবে:**
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+
+def process_transaction(txn_id, amount):
+    try:
+        validate_amount(amount)
+        execute_transaction(txn_id, amount)
+
+    except ValidationError as e:
+        # User-এর ভুল — WARNING
+        logger.warning(f"Invalid transaction {txn_id}: {e}")
+        raise
+
+    except DatabaseError as e:
+        # System-এর সমস্যা — ERROR + full traceback
+        logger.error(
+            f"DB error for txn {txn_id}",
+            exc_info=True    # ← full stack trace log হবে
+        )
+        raise
+
+    except Exception as e:
+        # Unexpected — CRITICAL
+        logger.critical(f"Unexpected error: {e}", exc_info=True)
+        raise
+```
+
+---
+
+## ২. Custom Exception — কীভাবে বানাবে
+
+---
+
+### 🔑 কেন Custom Exception:
+
+```
+Built-in exceptions অনেক generic:
+ValueError, TypeError, RuntimeError...
+
+Banking system-এ দরকার specific errors:
+InsufficientBalanceError
+AccountFrozenError
+DailyLimitExceededError
+FraudDetectedError
+```
+
+---
+
+### 💻 Basic Custom Exception:
+
+```python
+# Base Exception class থেকে inherit করো
+class BankingError(Exception):
+    """সব banking error-এর base"""
+    pass
+
+class InsufficientBalanceError(BankingError):
+    pass
+
+class AccountFrozenError(BankingError):
+    pass
+
+# Use:
+def withdraw(account, amount):
+    if account.frozen:
+        raise AccountFrozenError("Account is frozen")
+    if account.balance < amount:
+        raise InsufficientBalanceError("Not enough balance")
+
+try:
+    withdraw(account, 5000)
+except InsufficientBalanceError as e:
+    print(f"Balance কম: {e}")
+except AccountFrozenError as e:
+    print(f"Account frozen: {e}")
+```
+
+---
+
+### 💻 Rich Custom Exception — Extra Info সহ:
+
+```python
+class InsufficientBalanceError(Exception):
+
+    def __init__(self, account_id, requested, available):
+        self.account_id = account_id
+        self.requested = requested
+        self.available = available
+        self.shortfall = requested - available
+
+        # Parent-এ message পাঠাও
+        super().__init__(
+            f"Account {account_id}: "
+            f"Requested {requested} BDT, "
+            f"Available {available} BDT, "
+            f"Shortfall {self.shortfall} BDT"
+        )
+
+    def __str__(self):
+        return (
+            f"InsufficientBalance | "
+            f"Account: {self.account_id} | "
+            f"Need: {self.shortfall} BDT more"
+        )
+
+
+# Use:
+try:
+    raise InsufficientBalanceError("SB-001", 10000, 3000)
+except InsufficientBalanceError as e:
+    print(e)                    # Custom message
+    print(e.shortfall)          # 7000 — extra info access ✅
+    print(e.account_id)         # SB-001
+```
+
+---
+
+### 💻 Full Banking Exception Hierarchy:
+
+```python
+# ── Base
+class BankingError(Exception):
+    """সব UCB banking error-এর root"""
+
+    def __init__(self, message, error_code=None):
+        super().__init__(message)
+        self.error_code = error_code
+        self.message = message
+
+    def to_dict(self):
+        """API response-এর জন্য"""
+        return {
+            "error": self.__class__.__name__,
+            "message": self.message,
+            "code": self.error_code
+        }
+
+
+# ── Account Errors
+class AccountError(BankingError):
+    """Account সংক্রান্ত সব error"""
+    pass
+
+class AccountNotFoundError(AccountError):
+    def __init__(self, account_id):
+        super().__init__(
+            f"Account {account_id} not found",
+            error_code="ACC_001"
+        )
+        self.account_id = account_id
+
+class AccountFrozenError(AccountError):
+    def __init__(self, account_id, reason):
+        super().__init__(
+            f"Account {account_id} is frozen: {reason}",
+            error_code="ACC_002"
+        )
+
+class AccountClosedError(AccountError):
+    def __init__(self, account_id):
+        super().__init__(
+            f"Account {account_id} is permanently closed",
+            error_code="ACC_003"
+        )
+
+
+# ── Transaction Errors
+class TransactionError(BankingError):
+    """Transaction সংক্রান্ত সব error"""
+    pass
+
+class InsufficientBalanceError(TransactionError):
+    def __init__(self, account_id, requested, available):
+        self.requested = requested
+        self.available = available
+        self.shortfall = requested - available
+        super().__init__(
+            f"Insufficient balance in {account_id}. "
+            f"Need {self.shortfall} BDT more",
+            error_code="TXN_001"
+        )
+
+class DailyLimitExceededError(TransactionError):
+    def __init__(self, account_id, limit, attempted):
+        super().__init__(
+            f"Daily limit {limit} BDT exceeded. "
+            f"Attempted: {attempted} BDT",
+            error_code="TXN_002"
+        )
+        self.limit = limit
+        self.attempted = attempted
+
+class InvalidAmountError(TransactionError):
+    def __init__(self, amount):
+        super().__init__(
+            f"Invalid amount: {amount}. Must be positive",
+            error_code="TXN_003"
+        )
+
+
+# ── Security Errors
+class SecurityError(BankingError):
+    """Security সংক্রান্ত error"""
+    pass
+
+class FraudDetectedError(SecurityError):
+    def __init__(self, account_id, risk_score):
+        super().__init__(
+            f"Fraud suspected on {account_id}. "
+            f"Risk score: {risk_score}",
+            error_code="SEC_001"
+        )
+        self.risk_score = risk_score
+
+class UnauthorizedAccessError(SecurityError):
+    def __init__(self, user_id, resource):
+        super().__init__(
+            f"User {user_id} unauthorized to access {resource}",
+            error_code="SEC_002"
+        )
+```
+
+---
+
+### 💻 Real Use — Transfer Money:
+
+```python
+def transfer_money(from_id, to_id, amount):
+
+    # Validation
+    if amount <= 0:
+        raise InvalidAmountError(amount)
+
+    # Account check
+    from_acc = db.get_account(from_id)
+    if not from_acc:
+        raise AccountNotFoundError(from_id)
+
+    if from_acc.frozen:
+        raise AccountFrozenError(from_id, "Suspicious activity")
+
+    # Balance check
+    if from_acc.balance < amount:
+        raise InsufficientBalanceError(from_id, amount, from_acc.balance)
+
+    # Daily limit check
+    if from_acc.today_total + amount > from_acc.daily_limit:
+        raise DailyLimitExceededError(
+            from_id,
+            from_acc.daily_limit,
+            amount
+        )
+
+    # Fraud check
+    risk = fraud_service.check(from_id, amount)
+    if risk > 0.8:
+        raise FraudDetectedError(from_id, risk)
+
+    # Execute transfer
+    from_acc.balance -= amount
+    to_acc.balance += amount
+    db.save()
+
+
+# API Layer-এ handle করো:
+from django.http import JsonResponse
+
+def transfer_view(request):
+    try:
+        transfer_money(
+            request.data["from"],
+            request.data["to"],
+            request.data["amount"]
+        )
+        return JsonResponse({"status": "success"})
+
+    except InvalidAmountError as e:
+        return JsonResponse(e.to_dict(), status=400)
+
+    except AccountNotFoundError as e:
+        return JsonResponse(e.to_dict(), status=404)
+
+    except InsufficientBalanceError as e:
+        return JsonResponse({
+            **e.to_dict(),
+            "shortfall": e.shortfall   # extra info ✅
+        }, status=422)
+
+    except FraudDetectedError as e:
+        logger.critical(f"FRAUD: {e}", exc_info=True)
+        return JsonResponse(e.to_dict(), status=403)
+
+    except BankingError as e:
+        # যেকোনো banking error — catch-all
+        logger.error(f"Banking error: {e}")
+        return JsonResponse(e.to_dict(), status=500)
+
+    except Exception as e:
+        # Unexpected system error
+        logger.critical(f"Unexpected: {e}", exc_info=True)
+        return JsonResponse({"error": "System error"}, status=500)
+```
+
+---
+
+### 📊 Exception Hierarchy — Visual:
+
+```
+Exception
+└── BankingError
+    ├── AccountError
+    │   ├── AccountNotFoundError     (ACC_001)
+    │   ├── AccountFrozenError       (ACC_002)
+    │   └── AccountClosedError       (ACC_003)
+    ├── TransactionError
+    │   ├── InsufficientBalanceError (TXN_001)
+    │   ├── DailyLimitExceededError  (TXN_002)
+    │   └── InvalidAmountError       (TXN_003)
+    └── SecurityError
+        ├── FraudDetectedError       (SEC_001)
+        └── UnauthorizedAccessError  (SEC_002)
+```
+
+---
+
+### 📊 Best Practices Summary:
+
+| ❌ করো না | ✅ করো |
+|---|---|
+| Bare `except:` | Specific exception ধরো |
+| Exception চেপে রাখো | Log করো, re-raise করো |
+| Generic `Exception` ধরো | Custom exception বানাও |
+| `finally`-তে business logic | `finally`-তে শুধু cleanup |
+| Error message ছাড়া raise | Meaningful message দাও |
+| Exception chain ভাঙো | `raise X from Y` করো |
+
+---
+
+### 🎯 Interview Closing line:
+
+> *"Banking system-এ exception handling শুধু crash থেকে বাঁচা না — এটা security আর auditability-র অংশ। Custom exception hierarchy বানালে error code দিয়ে specific problem identify করা যায়, API response consistent হয়, আর log দেখে exactly কোথায় কী হয়েছে বোঝা যায়। `InsufficientBalanceError` ধরলে shortfall কতটুকু সেটাও জানা যায় — generic `ValueError` দিয়ে এটা সম্ভব না।"*
+
+---
+
+পরের গুরুত্বপূর্ণ topics:
+- **SOLID Principles**
+- **Django REST API + JWT**
+- **Database ORM + Query Optimization**
+- **Design Patterns — Singleton, Factory**
+
+কোনটা নিয়ে আগাবে?
