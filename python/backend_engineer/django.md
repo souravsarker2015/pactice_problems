@@ -1369,3 +1369,550 @@ Total time: ~50ms ✅
 - **SOLID Principles**
 
 কোনটা নিয়ে আগাবে?
+
+
+## Middleware কী? Custom Middleware কীভাবে বানাবে?
+
+---
+
+### 🔑 এক কথায়:
+
+> Middleware হলো Django-র **request/response pipeline-এর মাঝখানে বসা layer** — প্রতিটা request View-এ পৌঁছানোর আগে এবং প্রতিটা response Client-এ যাওয়ার আগে এখান দিয়ে যায়।
+
+সহজ analogy:
+```
+Airport Security = Middleware
+
+Plane-এ উঠতে:              Plane থেকে নামতে:
+✓ Ticket check              ✓ Passport check
+✓ Luggage scan              ✓ Customs check
+✓ Body scan                 ✓ Baggage claim
+
+প্রতিটা Passenger (Request)  প্রতিটা Passenger (Response)
+এই ধাপ পার করতেই হবে        এই ধাপ পার করতেই হবে
+```
+
+---
+
+### 🧠 Middleware Chain — Onion Model:
+
+```
+Request ↓                    Response ↑
+
+┌─────────────────────────────────────┐
+│  SecurityMiddleware                 │
+│  ┌─────────────────────────────┐    │
+│  │  SessionMiddleware          │    │
+│  │  ┌───────────────────────┐  │    │
+│  │  │  AuthMiddleware       │  │    │
+│  │  │  ┌─────────────────┐  │  │    │
+│  │  │  │  CsrfMiddleware │  │  │    │
+│  │  │  │  ┌───────────┐  │  │  │    │
+│  │  │  │  │   VIEW    │  │  │  │    │
+│  │  │  │  └───────────┘  │  │  │    │
+│  │  │  └─────────────────┘  │  │    │
+│  │  └───────────────────────┘  │    │
+│  └─────────────────────────────┘    │
+└─────────────────────────────────────┘
+
+Request:  বাইরে থেকে ভেতরে (উপর → নিচ)
+Response: ভেতর থেকে বাইরে (নিচ → উপর)
+```
+
+---
+
+### 💻 Django Built-in Middleware:
+
+```python
+# settings.py
+MIDDLEWARE = [
+    # ১. HTTPS enforce, XSS headers
+    "django.middleware.security.SecurityMiddleware",
+
+    # ২. Session data manage করে
+    "django.contrib.sessions.middleware.SessionMiddleware",
+
+    # ৩. CORS headers
+    "corsheaders.middleware.CorsMiddleware",
+
+    # ৪. Trailing slash redirect
+    "django.middleware.common.CommonMiddleware",
+
+    # ৫. CSRF token verify করে
+    "django.middleware.csrf.CsrfViewMiddleware",
+
+    # ৬. request.user set করে
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+
+    # ৭. Flash messages
+    "django.contrib.messages.middleware.MessageMiddleware",
+
+    # ৮. Clickjacking protection
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+]
+```
+
+---
+
+## Custom Middleware — ৩টা উপায়:
+
+---
+
+### 💻 উপায় ১ — Function-based (সহজ):
+
+```python
+def simple_middleware(get_response):
+    # Startup-এ একবার চলে
+    print("Middleware initialized")
+
+    def middleware(request):
+        # ── REQUEST আসার আগে ──
+        print(f"Before view: {request.path}")
+
+        response = get_response(request)   # View চালাও
+
+        # ── RESPONSE যাওয়ার আগে ──
+        print(f"After view: {response.status_code}")
+
+        return response
+
+    return middleware
+```
+
+---
+
+### 💻 উপায় ২ — Class-based (Recommended):
+
+```python
+class SimpleMiddleware:
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+        # Server startup-এ একবার চলে
+
+    def __call__(self, request):
+        # ── REQUEST আগে ──
+        # কাজ করো
+
+        response = self.get_response(request)
+
+        # ── RESPONSE পরে ──
+        # কাজ করো
+
+        return response
+```
+
+---
+
+### 💻 উপায় ৩ — Hooks দিয়ে (Fine-grained control):
+
+```python
+class HookMiddleware:
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        return response
+
+    def process_view(self, request, view_func, view_args, view_kwargs):
+        # URL match হওয়ার পরে, View চালানোর আগে
+        print(f"About to call: {view_func.__name__}")
+        return None   # None → View চলবে, Response → View skip
+
+    def process_exception(self, request, exception):
+        # View-এ unhandled exception হলে
+        print(f"Exception caught: {exception}")
+        return None   # None → Django default handling
+
+    def process_template_response(self, request, response):
+        # Template render হওয়ার আগে
+        return response
+```
+
+---
+
+## Real Banking Middleware Examples:
+
+---
+
+### 💻 ১. JWT Authentication Middleware:
+
+```python
+import jwt
+from django.conf import settings
+from django.http import JsonResponse
+from django.contrib.auth.models import User
+
+class JWTAuthMiddleware:
+
+    # এই paths-এ JWT দরকার নেই
+    PUBLIC_PATHS = [
+        "/api/auth/login/",
+        "/api/auth/register/",
+        "/api/health/",
+    ]
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+
+        # Public path → skip
+        if request.path in self.PUBLIC_PATHS:
+            return self.get_response(request)
+
+        # Token check
+        auth_header = request.headers.get("Authorization", "")
+
+        if not auth_header.startswith("Bearer "):
+            return JsonResponse(
+                {"error": "Token missing"},
+                status=401
+            )
+
+        token = auth_header.split(" ")[1]
+
+        try:
+            # Token decode করো
+            payload = jwt.decode(
+                token,
+                settings.SECRET_KEY,
+                algorithms=["HS256"]
+            )
+
+            # User set করো
+            user = User.objects.get(id=payload["user_id"])
+            request.user = user      # View-এ request.user পাবে ✅
+
+        except jwt.ExpiredSignatureError:
+            return JsonResponse({"error": "Token expired"}, status=401)
+
+        except jwt.InvalidTokenError:
+            return JsonResponse({"error": "Invalid token"}, status=401)
+
+        except User.DoesNotExist:
+            return JsonResponse({"error": "User not found"}, status=401)
+
+        return self.get_response(request)
+```
+
+---
+
+### 💻 ২. Request/Response Audit Middleware:
+
+```python
+import time
+import json
+import logging
+
+logger = logging.getLogger("banking.audit")
+
+class AuditLogMiddleware:
+
+    SENSITIVE_FIELDS = ["password", "pin", "cvv", "otp"]
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+
+        # Request body read করো (একবারই পড়া যায়)
+        request_body = self._get_body(request)
+        start_time = time.time()
+
+        # Request log
+        logger.info(self._format_request(request, request_body))
+
+        response = self.get_response(request)
+
+        # Response log
+        duration = time.time() - start_time
+        logger.info(self._format_response(request, response, duration))
+
+        # Response-এ timing header যোগ করো
+        response["X-Response-Time"] = f"{duration * 1000:.2f}ms"
+
+        return response
+
+    def _get_body(self, request):
+        try:
+            body = json.loads(request.body)
+            # Sensitive field mask করো
+            return self._mask_sensitive(body)
+        except Exception:
+            return {}
+
+    def _mask_sensitive(self, data: dict) -> dict:
+        masked = {}
+        for key, value in data.items():
+            if key.lower() in self.SENSITIVE_FIELDS:
+                masked[key] = "***"   # PIN, password লুকাও ✅
+            else:
+                masked[key] = value
+        return masked
+
+    def _format_request(self, request, body):
+        return (
+            f"REQUEST | "
+            f"Method: {request.method} | "
+            f"Path: {request.path} | "
+            f"User: {getattr(request.user, 'id', 'anonymous')} | "
+            f"IP: {self._get_ip(request)} | "
+            f"Body: {body}"
+        )
+
+    def _format_response(self, request, response, duration):
+        return (
+            f"RESPONSE | "
+            f"Path: {request.path} | "
+            f"Status: {response.status_code} | "
+            f"Duration: {duration * 1000:.2f}ms"
+        )
+
+    def _get_ip(self, request):
+        # Load balancer-এর পেছনে থাকলে
+        return (
+            request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0]
+            or request.META.get("REMOTE_ADDR", "")
+        )
+
+    def process_exception(self, request, exception):
+        logger.error(
+            f"EXCEPTION | {request.path} | {exception}",
+            exc_info=True
+        )
+        return None   # Django default error handling
+```
+
+---
+
+### 💻 ৩. Rate Limiting Middleware:
+
+```python
+import time
+from django.core.cache import cache
+from django.http import JsonResponse
+
+class RateLimitMiddleware:
+    """
+    Banking API-তে per-user rate limiting
+    Brute force attack থেকে রক্ষা
+    """
+
+    RATE_LIMITS = {
+        "/api/auth/login/":      (5, 60),    # 5 requests per 60s
+        "/api/accounts/transfer/": (10, 60), # 10 per 60s
+        "default":               (100, 60),  # 100 per 60s
+    }
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+
+        # Rate limit check
+        limit_result = self._check_rate_limit(request)
+
+        if limit_result["exceeded"]:
+            return JsonResponse({
+                "error": "Rate limit exceeded",
+                "retry_after": limit_result["retry_after"]
+            }, status=429)
+
+        response = self.get_response(request)
+
+        # Response-এ rate limit info যোগ করো
+        response["X-RateLimit-Remaining"] = limit_result["remaining"]
+        response["X-RateLimit-Reset"] = limit_result["reset"]
+
+        return response
+
+    def _check_rate_limit(self, request):
+        # IP বা User দিয়ে key বানাও
+        user_id = getattr(request.user, "id", None)
+        ip = request.META.get("REMOTE_ADDR")
+        identifier = f"user_{user_id}" if user_id else f"ip_{ip}"
+
+        # Path-specific limit
+        max_requests, window = self.RATE_LIMITS.get(
+            request.path,
+            self.RATE_LIMITS["default"]
+        )
+
+        cache_key = f"ratelimit_{identifier}_{request.path}"
+        current = cache.get(cache_key, {"count": 0, "reset": time.time() + window})
+
+        # Window শেষ হয়ে গেলে reset
+        if time.time() > current["reset"]:
+            current = {"count": 0, "reset": time.time() + window}
+
+        current["count"] += 1
+        cache.set(cache_key, current, window)
+
+        return {
+            "exceeded": current["count"] > max_requests,
+            "remaining": max(0, max_requests - current["count"]),
+            "reset": int(current["reset"]),
+            "retry_after": int(current["reset"] - time.time())
+        }
+```
+
+---
+
+### 💻 ৪. IP Whitelist Middleware — Banking Security:
+
+```python
+from django.http import JsonResponse
+from django.conf import settings
+
+class IPWhitelistMiddleware:
+    """
+    Admin panel শুধু office IP থেকে access করা যাবে
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+        self.allowed_ips = getattr(settings, "ADMIN_ALLOWED_IPS", [])
+
+    def __call__(self, request):
+
+        # Admin path check
+        if request.path.startswith("/admin/"):
+            client_ip = self._get_ip(request)
+
+            if client_ip not in self.allowed_ips:
+                return JsonResponse({
+                    "error": "Access denied from this IP"
+                }, status=403)
+
+        return self.get_response(request)
+
+    def _get_ip(self, request):
+        return (
+            request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
+            or request.META.get("REMOTE_ADDR")
+        )
+
+
+# settings.py
+ADMIN_ALLOWED_IPS = [
+    "10.0.0.1",      # Office IP
+    "192.168.1.100", # Dev machine
+]
+```
+
+---
+
+### 💻 ৫. Maintenance Mode Middleware:
+
+```python
+from django.http import JsonResponse
+from django.core.cache import cache
+
+class MaintenanceModeMiddleware:
+    """
+    System maintenance-এ সব request block করো
+    Banking-এ scheduled downtime handle করার জন্য
+    """
+
+    EXEMPT_PATHS = ["/api/health/", "/admin/"]
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+
+        # Exempt paths skip করো
+        if any(request.path.startswith(p) for p in self.EXEMPT_PATHS):
+            return self.get_response(request)
+
+        # Cache থেকে maintenance flag check করো
+        is_maintenance = cache.get("maintenance_mode", False)
+
+        if is_maintenance:
+            maintenance_info = cache.get("maintenance_info", {})
+            return JsonResponse({
+                "error": "System under maintenance",
+                "message": maintenance_info.get("message", ""),
+                "expected_back": maintenance_info.get("expected_back", "")
+            }, status=503)
+
+        return self.get_response(request)
+```
+
+---
+
+### 💻 Settings-এ Register করো:
+
+```python
+# settings.py
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+
+    # Custom Middleware — Order matter করে!
+    "mybank.middleware.MaintenanceModeMiddleware",  # ১ম — maintenance check
+    "mybank.middleware.IPWhitelistMiddleware",      # ২য় — IP check
+    "mybank.middleware.RateLimitMiddleware",        # ৩য় — rate limit
+    "mybank.middleware.JWTAuthMiddleware",          # ৪র্থ — auth check
+    "mybank.middleware.AuditLogMiddleware",         # ৫ম — logging
+
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+]
+```
+
+---
+
+### 📊 কোন Middleware কী করে:
+
+| Middleware | কাজ | Order |
+|---|---|---|
+| `MaintenanceModeMiddleware` | Downtime handle | ১ম |
+| `IPWhitelistMiddleware` | IP block | ২য় |
+| `RateLimitMiddleware` | Request limit | ৩য় |
+| `JWTAuthMiddleware` | Token verify | ৪র্থ |
+| `AuditLogMiddleware` | Request log | ৫ম |
+
+---
+
+### ⚠️ Middleware Order কেন Important:
+
+```
+❌ Wrong order:
+   AuditLog → JWT Auth
+   (user anonymous হলে log-এ user নেই)
+
+✅ Correct order:
+   JWT Auth → AuditLog
+   (আগে user identify, তারপর log)
+
+❌ Wrong:
+   RateLimit → Maintenance
+   (maintenance-এও rate limit count হচ্ছে)
+
+✅ Correct:
+   Maintenance → RateLimit
+   (maintenance-এ আগেই return)
+```
+
+---
+
+### 🎯 Interview Closing line:
+
+> *"Middleware হলো banking system-এর security আর observability-র backbone। আমি JWT authentication, rate limiting, audit logging, আর IP whitelist — চারটাই custom middleware দিয়ে implement করেছি। এগুলো Middleware-এ রাখার সবচেয়ে বড় সুবিধা হলো — প্রতিটা View-এ আলাদা করে লিখতে হয় না, একটা জায়গায় change করলে সব জায়গায় apply হয়। Order অনেক important — Maintenance আগে check না করলে down থাকার সময়ও rate limit count হতে থাকবে।"*
+
+---
+
+পরের গুরুত্বপূর্ণ topics:
+- **JWT Authentication — কীভাবে কাজ করে**
+- **Django ORM + Query Optimization**
+- **REST API Design Best Practices**
+- **SOLID Principles**
+
+কোনটা নিয়ে আগাবে?
