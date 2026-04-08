@@ -6453,3 +6453,248 @@ def __init__(self):
 * Design patterns (Factory, Strategy)
 
 বললেই next level prep 🚀
+
+
+একই clean, interview-ready style maintain করে **Factory Pattern** নিচে দিলাম 👇
+
+---
+
+# 🧠 Factory Pattern explain করো
+
+---
+
+## 🔑 এক কথায়:
+
+> **Factory Pattern object create করার logic hide করে — client শুধু বলে “কি চাই”, factory decide করে “কীভাবে বানাবে”**
+
+---
+
+## 🧠 সহজভাবে:
+
+```text
+Client → "I need a payment method"
+Factory → "OK, I'll give you Bkash/Nagad/Card"
+```
+
+👉 Client জানে না object কিভাবে তৈরি হচ্ছে ✅
+
+---
+
+# 🎯 Problem (Without Factory)
+
+```python
+class Bkash:
+    def pay(self): print("Pay with Bkash")
+
+class Nagad:
+    def pay(self): print("Pay with Nagad")
+
+
+# ❌ tightly coupled
+method = "bkash"
+
+if method == "bkash":
+    payment = Bkash()
+elif method == "nagad":
+    payment = Nagad()
+
+payment.pay()
+```
+
+👉 সমস্যা:
+
+```text
+❌ if-else everywhere
+❌ new method add করলে code change করতে হবে
+❌ maintain করা কঠিন
+```
+
+---
+
+# 🧩 Factory Pattern Solution
+
+---
+
+## 💻 Implementation:
+
+```python
+class Bkash:
+    def pay(self):
+        print("Pay with Bkash")
+
+class Nagad:
+    def pay(self):
+        print("Pay with Nagad")
+
+
+class PaymentFactory:
+    @staticmethod
+    def get_payment(method):
+        if method == "bkash":
+            return Bkash()
+        elif method == "nagad":
+            return Nagad()
+        else:
+            raise ValueError("Unknown method")
+
+
+# Client code
+payment = PaymentFactory.get_payment("bkash")
+payment.pay()
+```
+
+---
+
+## 🧠 কী হলো এখানে:
+
+```text
+Client → Factory call করছে
+Factory → object তৈরি করছে
+Client → শুধু use করছে
+```
+
+---
+
+# 📊 Flow Diagram
+
+```text
+Client
+  ↓
+Factory (decision making)
+  ↓
+Concrete Class (Bkash/Nagad)
+```
+
+---
+
+# 🚀 Better Version (Open/Closed Principle 🔥)
+
+---
+
+```python
+class Payment:
+    def pay(self):
+        pass
+
+
+class Bkash(Payment):
+    def pay(self):
+        print("Bkash")
+
+class Nagad(Payment):
+    def pay(self):
+        print("Nagad")
+
+
+class PaymentFactory:
+    _methods = {
+        "bkash": Bkash,
+        "nagad": Nagad
+    }
+
+    @classmethod
+    def get_payment(cls, method):
+        if method not in cls._methods:
+            raise ValueError("Invalid method")
+        return cls._methods[method]()
+```
+
+---
+
+👉 New method add করতে:
+
+```python
+class Card(Payment):
+    def pay(self):
+        print("Card")
+
+PaymentFactory._methods["card"] = Card
+```
+
+✅ existing code change করতে হলো না
+
+---
+
+# 🏦 Real Banking Example
+
+```python
+class Account:
+    def info(self):
+        pass
+
+class SavingsAccount(Account):
+    def info(self):
+        return "Savings Account"
+
+class CurrentAccount(Account):
+    def info(self):
+        return "Current Account"
+
+
+class AccountFactory:
+    @staticmethod
+    def create_account(acc_type):
+        if acc_type == "savings":
+            return SavingsAccount()
+        elif acc_type == "current":
+            return CurrentAccount()
+```
+
+👉 Banking system-এ:
+
+* account creation
+* payment method selection
+* notification service
+
+সব জায়গায় use হয় ✅
+
+---
+
+# ⚖️ Factory Pattern vs Simple Object Creation
+
+| Without Factory    | With Factory      |
+| ------------------ | ----------------- |
+| if-else everywhere | centralized logic |
+| tightly coupled    | loosely coupled   |
+| hard to extend     | easy to extend    |
+
+---
+
+# ⚠️ Common Mistake (Interview Trap)
+
+```python
+# ❌ Factory বানিয়ে আবার if-else overload করা
+```
+
+👉 Better:
+
+* dictionary mapping use করো
+* বা polymorphism
+
+---
+
+# 🎯 Interview Closing Line
+
+> *"Factory pattern abstracts object creation and promotes loose coupling. Instead of instantiating classes directly, I use a factory to decide which object to create, making the system more scalable and maintainable."*
+
+---
+
+## 🚀 Pro Tip (UCB interview killer)
+
+👉 যদি জিজ্ঞেস করে:
+**"When do you use Factory?"**
+
+তুমি বলবে:
+
+> *"I use Factory when object creation logic is complex or when multiple types of objects need to be created dynamically, such as payment methods, account types, or notification services."*
+
+---
+
+চাও হলে next high-impact topics:
+
+* Strategy Pattern (🔥 very important)
+* Dependency Injection (FastAPI-তে critical)
+* Decorator deep dive
+* SOLID principles (must for backend)
+
+বললেই next level prep 🚀
