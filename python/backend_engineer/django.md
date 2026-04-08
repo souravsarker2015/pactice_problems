@@ -5145,3 +5145,400 @@ CELERY_BEAT_SCHEDULE = {
 | Background tasks | User না আটকিয়ে heavy কাজ | Celery + Redis |
 
 পরের topic কোনটা? **Django REST Framework + JWT**, **OOP**, নাকি **Database Optimization**?
+
+দুটো topic একসাথে — project-এর মতো করে explain করো, interviewer impress হবে।
+
+---
+
+## ১. Email Sending System Design
+
+### 🔑 এক কথায়:
+> Email system মানে শুধু `send_mail()` call না — এটা একটা **pipeline**: trigger → queue → worker → provider → retry → log।
+
+**কেন সরাসরি `send_mail()` না?**
+```
+❌ Naive approach:
+def transfer_money(request):
+    process_payment()
+    send_mail(...)       # ← ২ সেকেন্ড block!
+    return Response(...)
+
+সমস্যা:
+- SMTP slow → user ২ সেকেন্ড অপেক্ষা করে
+- SMTP fail → transaction response-ই fail!
+- ১০,০০০ user = ১০,০০০ SMTP connection 💀
+```
+
+**Production-ready Email Architecture:**
+
+```python
+# models.py — Email কে DB-তে track করো
+class EmailLog(models.Model):
+    STATUS = [
+        ('PENDING', 'Pending'),
+        ('SENT', 'Sent'),
+        ('FAILED', 'Failed'),
+        ('RETRYING', 'Retrying'),
+    ]
+    recipient     = models.EmailField()
+    subject       = models.CharField(max_length=255)
+    template_name = models.CharField(max_length=100)
+    context_data  = models.JSONField()           # template variable
+    status        = models.CharField(max_length=20, choices=STATUS, default='PENDING')
+    retry_count   = models.IntegerField(default=0)
+    sent_at       = models.DateTimeField(null=True)
+    error_message = models.TextField(blank=True)
+    created_at    = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['status', 'created_at']),
+            models.Index(fields=['recipient']),
+        ]
+```
+
+```python
+# tasks.py — Celery task
+from celery import shared_task
+from celery.utils.log import get_task_logger
+from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
+
+logger = get_task_logger(__name__)
+
+@shared_task(
+    bind=True,
+    max_retries=3,                      # ৩ বার try করবে
+    default_retry_delay=60,             # ৬০ সেকেন্ড পর retry
+    autoretry_for=(Exception,),         # যেকোনো error-এ retry
+)
+def send_email_task(self, email_log_id):
+    log = EmailLog.objects.get(id=email_log_id)
+
+    try:
+        log.status = 'RETRYING' if log.retry_count > 0 else 'PENDING'
+        log.save()
+
+        # Template render করো
+        html_body = render_to_string(
+            f'emails/{log.template_name}.html',
+            log.context_data
+        )
+        text_body = render_to_string(
+            f'emails/{log.template_name}.txt',
+            log.context_data
+        )
+
+        # Email পাঠাও
+        msg = EmailMultiAlternatives(
+            subject=log.subject,
+            body=text_body,
+            from_email='noreply@ucb.com.bd',
+            to=[log.recipient]
+        )
+        msg.attach_alternative(html_body, "text/html")
+        msg.send()
+
+        # Success log
+        log.status = 'SENT'
+        log.sent_at = timezone.now()
+        log.save()
+        logger.info(f"Email sent: {log.id} → {log.recipient}")
+
+    except Exception as exc:
+        log.retry_count += 1
+        log.error_message = str(exc)
+        log.status = 'FAILED' if log.retry_count >= 3 else 'RETRYING'
+        log.save()
+        logger.error(f"Email failed: {log.id}, retry {log.retry_count}")
+        raise self.retry(exc=exc)        # Celery retry trigger
+```
+
+```python
+# services.py — Email trigger করার clean interface
+class EmailService:
+
+    @staticmethod
+    def send_transaction_alert(account, transaction):
+        """Payment হলে call করো"""
+        log = EmailLog.objects.create(
+            recipient=account.email,
+            subject=f"UCB: Transaction Alert - Tk {transaction.amount}",
+            template_name='transaction_alert',
+            context_data={
+                'account_name': account.holder_name,
+                'account_number': account.number[-4:],  # শেষ ৪ digit
+                'amount': str(transaction.amount),
+                'txn_type': transaction.txn_type,
+                'balance': str(account.balance),
+                'date': transaction.created_at.strftime('%d %b %Y, %I:%M %p'),
+                'branch': transaction.branch.name,
+            }
+        )
+        send_email_task.delay(log.id)   # Background-এ পাঠাও
+        return log.id
+
+    @staticmethod
+    def send_monthly_statement(account, month, year, pdf_url):
+        """মাসিক statement"""
+        log = EmailLog.objects.create(
+            recipient=account.email,
+            subject=f"UCB: Statement for {month}/{year}",
+            template_name='monthly_statement',
+            context_data={
+                'account_name': account.holder_name,
+                'month': month, 'year': year,
+                'pdf_url': pdf_url,
+            }
+        )
+        send_email_task.delay(log.id)
+```
+
+```python
+# views.py — এখন view অনেক সহজ
+def transfer_money(request):
+    txn = process_payment(request.data)
+
+    # Email queue-এ দাও (non-blocking, <1ms)
+    EmailService.send_transaction_alert(txn.account, txn)
+
+    return Response({"status": "success", "txn_id": txn.id})
+    # User এখনই response পায় — email পরে যাবে ✅
+```
+
+**Email template — `emails/transaction_alert.html`:**
+```html
+<!DOCTYPE html>
+<html>
+<body style="font-family: Arial; max-width: 600px; margin: auto;">
+  <div style="background: #003087; padding: 20px; text-align: center;">
+    <h1 style="color: white;">United Commercial Bank</h1>
+  </div>
+  <div style="padding: 30px;">
+    <p>Dear {{ account_name }},</p>
+    <p>A transaction has occurred on your account ending <strong>{{ account_number }}</strong>.</p>
+    <table style="width:100%; border-collapse:collapse;">
+      <tr><td>Transaction Type</td><td><strong>{{ txn_type }}</strong></td></tr>
+      <tr><td>Amount</td><td><strong>Tk {{ amount }}</strong></td></tr>
+      <tr><td>Available Balance</td><td><strong>Tk {{ balance }}</strong></td></tr>
+      <tr><td>Date & Time</td><td>{{ date }}</td></tr>
+      <tr><td>Branch</td><td>{{ branch }}</td></tr>
+    </table>
+    <p>If this transaction was not made by you, call <strong>16419</strong> immediately.</p>
+  </div>
+</body>
+</html>
+```
+
+**Email provider settings — fail-safe:**
+```python
+# settings.py
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.sendgrid.net'       # SendGrid / AWS SES
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'apikey'
+EMAIL_HOST_PASSWORD = env('SENDGRID_API_KEY')
+
+# Development-এ console-এ দেখো
+# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+```
+
+এখন email sending-এর পুরো flow টা diagram হিসেবে দেখো:**Interview-এ এভাবে বলো:**
+> *"আমার project-এ email directly send করতাম না। প্রতিটা email আগে `EmailLog` table-এ `PENDING` status-এ save হতো — এটা audit trail হিসেবে কাজ করে। তারপর Celery task queue-এ পাঠাতাম। Worker SendGrid দিয়ে send করত, fail হলে ৬০ সেকেন্ড পর retry, maximum ৩ বার। ৩ বারও fail হলে `FAILED` mark করে admin-কে alert। এতে user কখনো block হতো না, আর কোনো email miss হলে DB দেখে manual resend করা যেত।"*
+
+---
+
+## ২. Scheduled Task কীভাবে করো
+
+### 🔑 এক কথায়:
+> Celery Beat হলো Python-এর **cron** — নির্দিষ্ট সময়ে automatically task চালায়।
+
+**Setup:**
+```bash
+# দুটো process আলাদা চালাতে হয়
+celery -A ucb_app worker --loglevel=info    # task execute করে
+celery -A ucb_app beat --loglevel=info      # schedule check করে
+```
+
+**Banking-এ real scheduled tasks:**
+
+```python
+# settings.py
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+
+    # ১. রাত ১১টায় — daily reconciliation
+    'nightly-reconciliation': {
+        'task': 'banking.tasks.daily_reconciliation',
+        'schedule': crontab(hour=23, minute=0),
+    },
+
+    # ২. প্রতি ৫ মিনিটে — exchange rate update
+    'exchange-rate-refresh': {
+        'task': 'banking.tasks.update_exchange_rates',
+        'schedule': crontab(minute='*/5'),
+    },
+
+    # ৩. প্রতি মাসের ১ তারিখ সকাল ৮টায় — monthly statement
+    'monthly-statements': {
+        'task': 'banking.tasks.send_monthly_statements',
+        'schedule': crontab(hour=8, minute=0, day_of_month=1),
+    },
+
+    # ৪. প্রতিদিন রাত ১২টায় — dormant account check
+    'dormant-account-check': {
+        'task': 'banking.tasks.flag_dormant_accounts',
+        'schedule': crontab(hour=0, minute=0),
+    },
+
+    # ৫. প্রতি সোমবার সকাল ৭টায় — weekly fraud report
+    'weekly-fraud-report': {
+        'task': 'banking.tasks.generate_fraud_report',
+        'schedule': crontab(hour=7, minute=0, day_of_week=1),
+    },
+}
+```
+
+**Actual task implementations:**
+```python
+# tasks.py
+
+@shared_task
+def daily_reconciliation():
+    """
+    রাত ১১টায় চলে —
+    সারাদিনের সব transaction core banking-এর সাথে মিলাও
+    """
+    today = date.today()
+    unreconciled = Transaction.objects.filter(
+        date=today,
+        reconciled=False,
+        status='COMPLETED'
+    )
+
+    matched = 0
+    mismatched = []
+
+    for txn in unreconciled.iterator(chunk_size=500):
+        core_data = fetch_from_core_banking(txn.reference)
+
+        if core_data and core_data['amount'] == float(txn.amount):
+            txn.reconciled = True
+            txn.save(update_fields=['reconciled'])
+            matched += 1
+        else:
+            mismatched.append(txn.id)
+
+    if mismatched:
+        # Finance team-কে alert করো
+        EmailService.send_reconciliation_alert(
+            mismatched_ids=mismatched,
+            date=today
+        )
+
+    logger.info(f"Reconciliation: {matched} matched, {len(mismatched)} mismatched")
+    return {'matched': matched, 'mismatched': len(mismatched)}
+
+
+@shared_task
+def send_monthly_statements():
+    """
+    ১ তারিখ সকাল ৮টায় —
+    সব active account-এর statement email করো
+    """
+    last_month = date.today().replace(day=1) - timedelta(days=1)
+    month, year = last_month.month, last_month.year
+
+    accounts = Account.objects.filter(
+        status='ACTIVE',
+        email_statement=True       # statement চালু আছে
+    ).iterator(chunk_size=200)
+
+    count = 0
+    for account in accounts:
+        # Statement generate + email (background-এ)
+        generate_and_send_statement.delay(account.id, month, year)
+        count += 1
+
+    logger.info(f"Queued {count} statements for {month}/{year}")
+
+
+@shared_task
+def flag_dormant_accounts():
+    """
+    প্রতিদিন রাত ১২টায় —
+    ৬ মাস কোনো transaction নেই → dormant mark করো
+    """
+    cutoff = timezone.now() - timedelta(days=180)
+
+    dormant_accounts = Account.objects.filter(
+        status='ACTIVE',
+        last_transaction_date__lt=cutoff
+    )
+
+    updated = dormant_accounts.update(status='DORMANT')
+
+    if updated > 0:
+        logger.warning(f"{updated} accounts marked dormant")
+        # Compliance team-কে notify করো
+        send_dormant_report.delay(count=updated, date=date.today())
+```
+
+**Dynamic schedule — DB থেকে schedule control করা:**
+```python
+# django-celery-beat package দিয়ে
+# Admin panel থেকেই schedule change করা যায়!
+
+# pip install django-celery-beat
+
+# settings.py
+INSTALLED_APPS += ['django_celery_beat']
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+# এখন admin panel-এ গিয়ে:
+# Periodic Tasks → Add → schedule change করো
+# Code deploy ছাড়াই! ✅
+```
+
+**Task monitoring — কোনটা চলছে, কোনটা failed:**
+```python
+# pip install flower  ← Celery monitoring UI
+
+# চালাও:
+celery -A ucb_app flower --port=5555
+# Browser-এ: http://localhost:5555
+# দেখা যাবে: active tasks, failed tasks, retry count, runtime
+```
+
+**Production-এ supervisor দিয়ে সব process manage:**
+```ini
+; /etc/supervisor/conf.d/celery.conf
+
+[program:celery-worker]
+command=celery -A ucb_app worker --concurrency=4 --loglevel=info
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/celery/worker.err.log
+
+[program:celery-beat]
+command=celery -A ucb_app beat --loglevel=info
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/celery/beat.err.log
+```
+
+---
+
+### 🎯 Interview Closing Lines:
+
+**Email system:**
+> *"Email পাঠানোর সময় আমি সরাসরি SMTP call দিতাম না। `EmailLog` model-এ save করে Celery queue-এ দিতাম — এতে user block হয় না, retry automatic, আর audit trail থাকে। ৩ বার fail হলে admin alert যায়।"*
+
+**Scheduled task:**
+> *"Celery Beat দিয়ে scheduled task চালাতাম। `django-celery-beat` use করলে DB থেকে schedule control করা যায় — code deploy ছাড়াই admin panel থেকে time change করা যায়। Production-এ supervisor দিয়ে worker আর beat দুটো আলাদা process হিসেবে চালাতাম, crash হলে auto-restart হতো।"*
+
+---
+
+পরের topic কোনটা? **JWT Authentication**, **Django ORM optimization**, নাকি **REST API design**?
