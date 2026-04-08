@@ -7647,3 +7647,232 @@ class AdminReportService(Reportable):
 * Middleware (Django/FastAPI)
 
 বললেই next level prep 🚀
+
+একই interview-ready style-এ **Dependency Inversion Principle (DIP)** নিচে cleanভাবে দিলাম 👇
+
+---
+
+# 🧠 Dependency Inversion Principle (DIP)
+
+---
+
+## 🔑 এক কথায়:
+
+> **High-level module low-level module-এর উপর depend করবে না — দুটোই abstraction-এর উপর depend করবে**
+
+---
+
+## 🧠 সহজভাবে:
+
+```text
+❌ Service → MySQLDB (direct dependency)
+✅ Service → Database interface → MySQLDB / PostgreSQL
+```
+
+👉 Direct dependency remove করা হচ্ছে
+
+---
+
+# 🧩 Definition
+
+> *"Depend on abstractions, not on concrete implementations."*
+
+---
+
+# ❌ Wrong Design (Tight Coupling)
+
+```python
+class MySQLDB:
+    def connect(self):
+        return "MySQL connected"
+
+
+class UserService:
+    def __init__(self):
+        self.db = MySQLDB()   # ❌ tightly coupled
+
+    def get_user(self):
+        return self.db.connect()
+```
+
+---
+
+## সমস্যা:
+
+```text
+❌ DB change করলে service code change করতে হবে
+❌ testing কঠিন
+❌ flexible না
+```
+
+---
+
+# ✅ Correct Design (Using Abstraction)
+
+```python
+class Database:
+    def connect(self):
+        pass
+
+
+class MySQLDB(Database):
+    def connect(self):
+        return "MySQL connected"
+
+
+class PostgreSQLDB(Database):
+    def connect(self):
+        return "PostgreSQL connected"
+
+
+class UserService:
+    def __init__(self, db: Database):   # ✅ abstraction use
+        self.db = db
+
+    def get_user(self):
+        return self.db.connect()
+
+
+# Inject dependency
+service = UserService(MySQLDB())
+print(service.get_user())
+```
+
+---
+
+## 🧠 কী হলো এখানে:
+
+```text
+UserService → Database interface-এর উপর depend করছে
+MySQLDB / PostgreSQL → interchangeable ✅
+```
+
+---
+
+# 🔄 Control Flow (Inversion)
+
+```text
+Before:
+UserService → MySQLDB
+
+After:
+UserService → Database ← MySQLDB
+                           PostgreSQLDB
+```
+
+👉 Dependency direction invert হয়েছে 🔥
+
+---
+
+# 🏦 Real Banking Example
+
+```python
+class PaymentGateway:
+    def pay(self):
+        pass
+
+
+class BkashGateway(PaymentGateway):
+    def pay(self):
+        return "Paid via Bkash"
+
+
+class NagadGateway(PaymentGateway):
+    def pay(self):
+        return "Paid via Nagad"
+
+
+class PaymentService:
+    def __init__(self, gateway: PaymentGateway):
+        self.gateway = gateway
+
+    def process_payment(self):
+        return self.gateway.pay()
+
+
+# Inject different gateway
+service = PaymentService(BkashGateway())
+print(service.process_payment())
+```
+
+👉 same service → multiple gateway support ✅
+
+---
+
+# ⚖️ Without DIP vs With DIP
+
+| Without DIP     | With DIP        |
+| --------------- | --------------- |
+| tightly coupled | loosely coupled |
+| hard to change  | easy to extend  |
+| hard to test    | easy to mock    |
+
+---
+
+# 🧪 Testing Advantage
+
+```python
+class MockDB(Database):
+    def connect(self):
+        return "Mock DB"
+
+service = UserService(MockDB())
+```
+
+👉 real DB লাগলো না ✅
+
+---
+
+# 🔥 DIP + Dependency Injection (Very Important)
+
+```text
+DIP → principle (concept)
+DI  → implementation (how to achieve DIP)
+```
+
+👉 DI use করে DIP achieve করি
+
+---
+
+# ⚠️ Common Mistake
+
+```python
+# ❌ abstraction use করেও ভিতরে concrete বানানো
+self.db = MySQLDB()
+```
+
+👉 এটা DIP violation 😄
+
+---
+
+# 🎯 Interview Line
+
+> *"Dependency Inversion Principle suggests that high-level modules should not depend on low-level modules. Instead, both should depend on abstractions. This reduces coupling and improves flexibility and testability."*
+
+---
+
+# 🚀 One-line memory trick
+
+> **"Depend on interface, not implementation."**
+
+---
+
+## 🚀 Pro Tip (UCB interview killer)
+
+👉 যদি জিজ্ঞেস করে:
+**"Where do you use DIP?"**
+
+তুমি বলবে:
+
+> *"In backend systems, I use DIP in services like payment processing, database access, and external API integrations so that I can easily swap implementations without changing business logic."*
+
+---
+
+চাও হলে next:
+
+* SOLID full revision (🔥 rapid)
+* Clean Architecture (very important)
+* Repository pattern
+* Service layer design
+
+বললেই final interview crash course করে দিব 🚀
