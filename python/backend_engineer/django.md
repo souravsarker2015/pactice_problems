@@ -7059,3 +7059,363 @@ SaaS Arch       → Nginx → Django → Services → PostgreSQL + Redis + S3
 - **Testing — pytest-django, mock, factory_boy**
 
 কোনটা নিয়ে আগাবে?
+
+
+তোমার interview style maintain করে Django/backend focused **high-impact topics** নিচে দিলাম 👇
+
+---
+
+# 🧠 Celery Retry Mechanism
+
+---
+
+## 🔑 এক কথায়:
+
+> **Celery retry ব্যবহার করি failed task আবার execute করার জন্য — automatic বা manualভাবে**
+
+---
+
+## 🧠 কেন দরকার?
+
+```text
+API fail
+DB temporarily down
+Network issue
+
+→ retry করে success করা যায় ✅
+```
+
+---
+
+## 💻 Basic Example
+
+```python
+from celery import shared_task
+
+@shared_task(bind=True, max_retries=3)
+def send_email(self, user_id):
+    try:
+        # risky operation
+        send_email_to_user(user_id)
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=5)
+```
+
+---
+
+## 🧠 কী হচ্ছে:
+
+```text
+❌ task fail হলো
+→ retry হবে 5 sec পরে
+→ max 3 বার চেষ্টা করবে
+```
+
+---
+
+## ⚙️ Important Params
+
+```text
+max_retries → কতবার retry করবে
+countdown   → delay (seconds)
+retry_backoff → exponential delay
+retry_jitter → random delay (thundering herd avoid)
+```
+
+---
+
+## 🎯 Interview Line:
+
+> *"Celery retry mechanism allows failed background tasks to be retried with delay and backoff, ensuring reliability in distributed systems."*
+
+---
+
+# 🧠 Idempotency কী
+
+---
+
+## 🔑 এক কথায়:
+
+> **একই request multiple বার করলে same result আসবে — duplicate effect হবে না**
+
+---
+
+## 🧠 Example:
+
+```text
+POST /payment
+
+User double click করলো 😱
+→ 2টা payment হওয়া যাবে না ❌
+→ only 1টা হবে ✅
+```
+
+---
+
+## 💻 Implementation Idea
+
+```python
+def process_payment(request_id, amount):
+    if request_id in processed_requests:
+        return "Already processed"
+
+    processed_requests.add(request_id)
+    # process payment
+```
+
+---
+
+## 🧠 Real Technique:
+
+```text
+✅ Idempotency key (header)
+✅ DB unique constraint
+✅ Redis lock
+```
+
+---
+
+## 🏦 Banking Example:
+
+```text
+transaction_id unique
+→ same txn_id আবার এলে ignore
+```
+
+---
+
+## 🎯 Interview Line:
+
+> *"Idempotency ensures that multiple identical requests produce the same result without side effects, which is critical in payment systems."*
+
+---
+
+# 🧠 API Versioning
+
+---
+
+## 🔑 এক কথায়:
+
+> **API change হলেও old client break না করে multiple version maintain করা**
+
+---
+
+## 🧠 কেন দরকার?
+
+```text
+Mobile app update slow 😅
+→ old version still working রাখতে হবে
+```
+
+---
+
+## 🧩 Versioning Types
+
+---
+
+### ১. URL Versioning (Most common)
+
+```text
+/api/v1/users
+/api/v2/users
+```
+
+---
+
+### ২. Header Versioning
+
+```text
+Accept: application/vnd.myapi.v1+json
+```
+
+---
+
+### ৩. Query Param
+
+```text
+/api/users?version=1
+```
+
+---
+
+## 💻 Django Example
+
+```python
+# urls.py
+path("api/v1/users/", views.v1_users),
+path("api/v2/users/", views.v2_users),
+```
+
+---
+
+## 🧠 Best Practice
+
+```text
+✅ backward compatibility রাখো
+✅ breaking change হলে version bump করো
+✅ deprecation strategy রাখো
+```
+
+---
+
+## 🎯 Interview Line:
+
+> *"API versioning helps maintain backward compatibility while evolving the API without breaking existing clients."*
+
+---
+
+# 🧠 Production Debugging
+
+---
+
+## 🔑 এক কথায়:
+
+> **Production issue diagnose করি logs, monitoring, tracing, metrics দিয়ে — direct print না 😄**
+
+---
+
+# 🚀 ১. Logging (Must)
+
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+
+def process():
+    logger.info("Processing started")
+    try:
+        risky()
+    except Exception as e:
+        logger.error(f"Error: {e}")
+```
+
+---
+
+## 🧠 Levels:
+
+```text
+DEBUG
+INFO
+WARNING
+ERROR
+CRITICAL
+```
+
+---
+
+# 🚀 ২. Error Tracking
+
+👉 tools:
+
+```text
+Sentry
+```
+
+👉 real-time error alert
+
+---
+
+# 🚀 ৩. Monitoring
+
+```text
+CPU usage
+Memory
+Response time
+```
+
+👉 tools:
+
+```text
+Prometheus, Grafana
+```
+
+---
+
+# 🚀 ৪. Debugging Strategy
+
+```text
+1. Logs check করো
+2. Recent deploy check করো
+3. Reproduce করার চেষ্টা করো
+4. DB / API latency check করো
+```
+
+---
+
+# 🚀 ৫. Django-specific
+
+```python
+DEBUG = False   # production-এ
+ALLOWED_HOSTS = [...]
+```
+
+👉 never expose:
+
+```text
+stack trace ❌
+secret key ❌
+```
+
+---
+
+# 🚀 ৬. Query Optimization
+
+```python
+# ❌ N+1 problem
+for user in users:
+    user.orders.all()
+
+# ✅
+User.objects.prefetch_related("orders")
+```
+
+---
+
+# 🏦 Real Banking Scenario
+
+```text
+Payment stuck 😱
+
+→ logs check
+→ Celery task status check
+→ DB transaction check
+→ retry mechanism verify
+```
+
+---
+
+# ⚠️ Common Mistake
+
+```text
+❌ print debugging in production
+❌ DEBUG=True রাখা
+❌ no logging
+```
+
+---
+
+# 🎯 Final Interview Closing Line
+
+> *"In production, I rely on structured logging, monitoring tools, and error tracking systems like Sentry to debug issues. I avoid direct debugging and instead analyze logs, metrics, and system behavior to identify and fix problems."*
+
+---
+
+## 🚀 Pro Tip (UCB interview killer)
+
+👉 যদি জিজ্ঞেস করে:
+**"How do you debug production issue?"**
+
+তুমি বলবে:
+
+> *"First I check logs and error tracking tools, then identify the failing component, reproduce the issue in staging if possible, and analyze database queries or external API calls. I also ensure proper monitoring is in place to detect such issues early."*
+
+---
+
+চাও হলে next:
+
+* Django middleware
+* Authentication (JWT vs Session)
+* Caching (Redis deep dive 🔥)
+* System design (banking level)
+
+বললেই full backend interview crash course করে দিব 🚀
