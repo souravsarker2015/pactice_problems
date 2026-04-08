@@ -6944,3 +6944,506 @@ self.db = Database()
 * Middleware (Django/FastAPI)
 
 বললেই next level prep 🚀
+
+
+একই interview-ready, structured style-এ **SOLID principles** নিচে দিলাম 👇
+
+---
+
+# 🧠 SOLID Principles
+
+---
+
+## 🔑 এক কথায়:
+
+> **SOLID হলো ৫টা design principle — clean, scalable, maintainable code লেখার জন্য**
+
+---
+
+# 🔤 S — Single Responsibility Principle (SRP)
+
+---
+
+## 🔑 এক কথায়:
+
+> **একটা class-এর একটাই responsibility থাকবে**
+
+---
+
+## ❌ Wrong:
+
+```python id="s1w1"
+class User:
+    def save_to_db(self): pass
+    def send_email(self): pass
+```
+
+👉 এক class → multiple কাজ ❌
+
+---
+
+## ✅ Correct:
+
+```python id="s1w2"
+class User:
+    pass
+
+class UserRepository:
+    def save(self): pass
+
+class EmailService:
+    def send(self): pass
+```
+
+---
+
+## 🎯 Interview Line:
+
+> *"A class should have only one reason to change."*
+
+---
+
+# 🔤 O — Open/Closed Principle (OCP)
+
+---
+
+## 🔑 এক কথায়:
+
+> **Code open থাকবে extension-এর জন্য, but closed থাকবে modification-এর জন্য**
+
+---
+
+## ❌ Wrong:
+
+```python id="s2w1"
+def calculate_discount(user_type):
+    if user_type == "regular":
+        return 10
+    elif user_type == "vip":
+        return 20
+```
+
+---
+
+## ✅ Correct:
+
+```python id="s2w2"
+class Discount:
+    def get(self): pass
+
+class RegularDiscount(Discount):
+    def get(self): return 10
+
+class VIPDiscount(Discount):
+    def get(self): return 20
+```
+
+👉 নতুন type add → existing code change করতে হয় না ✅
+
+---
+
+## 🎯 Interview Line:
+
+> *"Software entities should be open for extension but closed for modification."*
+
+---
+
+# 🔤 L — Liskov Substitution Principle (LSP)
+
+---
+
+## 🔑 এক কথায়:
+
+> **Child class parent class-এর জায়গায় বসলে behavior break করা যাবে না**
+
+---
+
+## ❌ Wrong:
+
+```python id="s3w1"
+class Bird:
+    def fly(self): pass
+
+class Penguin(Bird):
+    def fly(self):
+        raise Exception("Can't fly")   # ❌
+```
+
+---
+
+## ✅ Correct:
+
+```python id="s3w2"
+class Bird:
+    pass
+
+class FlyingBird(Bird):
+    def fly(self): pass
+
+class Penguin(Bird):
+    pass
+```
+
+---
+
+## 🎯 Interview Line:
+
+> *"Subclasses should be replaceable with their base classes without breaking the application."*
+
+---
+
+# 🔤 I — Interface Segregation Principle (ISP)
+
+---
+
+## 🔑 এক কথায়:
+
+> **Client-কে unnecessary method implement করতে বাধ্য করা যাবে না**
+
+---
+
+## ❌ Wrong:
+
+```python id="s4w1"
+class Worker:
+    def work(self): pass
+    def eat(self): pass
+
+class Robot(Worker):
+    def eat(self): pass   # ❌ useless
+```
+
+---
+
+## ✅ Correct:
+
+```python id="s4w2"
+class Workable:
+    def work(self): pass
+
+class Eatable:
+    def eat(self): pass
+
+class Robot(Workable):
+    def work(self): pass
+```
+
+---
+
+## 🎯 Interview Line:
+
+> *"Clients should not be forced to depend on methods they do not use."*
+
+---
+
+# 🔤 D — Dependency Inversion Principle (DIP)
+
+---
+
+## 🔑 এক কথায়:
+
+> **High-level module low-level module-এর উপর depend করবে না — দুটোই abstraction-এর উপর depend করবে**
+
+---
+
+## ❌ Wrong:
+
+```python id="s5w1"
+class MySQLDB:
+    pass
+
+class UserService:
+    def __init__(self):
+        self.db = MySQLDB()   # ❌ tightly coupled
+```
+
+---
+
+## ✅ Correct:
+
+```python id="s5w2"
+class Database:
+    def connect(self): pass
+
+class MySQLDB(Database):
+    def connect(self): pass
+
+class UserService:
+    def __init__(self, db: Database):   # ✅ abstraction
+        self.db = db
+```
+
+---
+
+## 🎯 Interview Line:
+
+> *"Depend on abstractions, not on concrete implementations."*
+
+---
+
+# 🏦 Real Banking Mapping
+
+```text id="bankmap"
+SRP → Account logic, Email service আলাদা
+OCP → New payment method add without modifying old code
+LSP → Different account types behave correctly
+ISP → API clients only implement needed endpoints
+DIP → Service depends on interface, not DB directly
+```
+
+---
+
+# ⚡ Quick Summary
+
+| Principle | Core Idea             |
+| --------- | --------------------- |
+| S         | One job               |
+| O         | Extend, don’t modify  |
+| L         | Replace safely        |
+| I         | Small interfaces      |
+| D         | Depend on abstraction |
+
+---
+
+# 🎯 Final Interview Closing Line
+
+> *"SOLID principles help in writing clean, maintainable, and scalable backend systems. In real-world applications like banking systems, they reduce coupling, improve testability, and make it easier to extend features without breaking existing functionality."*
+
+---
+
+## 🚀 Pro Tip (UCB interview killer)
+
+👉 যদি জিজ্ঞেস করে:
+**"Which one do you use most?"**
+
+তুমি বলবে:
+
+> *"In backend systems, I frequently use SRP and DIP. SRP helps me keep services clean and focused, and DIP combined with dependency injection makes the system flexible and easy to test."*
+
+---
+
+চাও হলে next high-impact topics:
+
+* Clean Architecture (🔥 very important)
+* Repository pattern
+* Middleware (Django/FastAPI)
+* Caching (Redis)
+
+বললেই next level prep 🚀
+
+
+
+
+একই interview-ready style-এ **Liskov Substitution Principle (LSP)** নিচে দিলাম 👇
+
+---
+
+# 🧠 Liskov Substitution Principle (LSP)
+
+---
+
+## 🔑 এক কথায়:
+
+> **Child class এমন হতে হবে যাতে parent class-এর জায়গায় বসালেও program break না করে**
+
+---
+
+## সহজভাবে:
+
+```text
+যদি তুমি Parent class ব্যবহার করে code লেখো,
+তাহলে তার যেকোনো Child class বসালেও same behavior expected থাকবে ✅
+```
+
+---
+
+# 🧩 Definition
+
+> *"Subtypes must be substitutable for their base types without altering the correctness of the program."*
+
+মানে:
+
+* child class parent-এর contract follow করবে
+* unexpected exception দিবে না
+* behavior ভাঙবে না
+
+---
+
+# ❌ Wrong Example
+
+```python
+class Bird:
+    def fly(self):
+        print("Bird is flying")
+
+class Sparrow(Bird):
+    pass
+
+class Penguin(Bird):
+    def fly(self):
+        raise Exception("Penguin can't fly")
+```
+
+---
+
+## সমস্যা কী?
+
+```text
+Bird class বলছে সব bird fly করতে পারে
+কিন্তু Penguin সেটা পারে না
+
+→ Parent-এর জায়গায় Child বসালে code break করছে
+→ LSP violated ❌
+```
+
+---
+
+# ✅ Correct Design
+
+```python
+class Bird:
+    pass
+
+class FlyingBird(Bird):
+    def fly(self):
+        print("Flying")
+
+class Sparrow(FlyingBird):
+    pass
+
+class Penguin(Bird):
+    pass
+```
+
+---
+
+## এখানে কী হলো?
+
+```text
+✅ শুধু যেসব bird fly করতে পারে, তারাই fly method পেল
+✅ Penguin-এর জন্য আলাদা আচরণ রাখা হলো
+✅ Parent contract ভাঙল না
+```
+
+---
+
+# 🧠 Another Simple Example
+
+```python
+class Rectangle:
+    def set_width(self, width):
+        self.width = width
+
+    def set_height(self, height):
+        self.height = height
+
+class Square(Rectangle):
+    def set_width(self, width):
+        self.width = width
+        self.height = width
+
+    def set_height(self, height):
+        self.height = height
+        self.width = height
+```
+
+---
+
+## Problem:
+
+```text
+Rectangle ধরে code লিখলে
+width আর height আলাদা ভাবে change করার expectation থাকে
+
+কিন্তু Square-এ একটাকে change করলে আরেকটাও change হয়ে যায়
+→ unexpected behavior
+→ LSP violated ❌
+```
+
+---
+
+# ✅ Better Approach
+
+```python
+class Shape:
+    pass
+
+class Rectangle(Shape):
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+
+class Square(Shape):
+    def __init__(self, side):
+        self.side = side
+```
+
+---
+
+# 🏦 Real Banking Example
+
+```python
+class Account:
+    def withdraw(self, amount):
+        pass
+
+class SavingsAccount(Account):
+    def withdraw(self, amount):
+        if amount > 50000:
+            raise Exception("Limit exceeded")
+        return "Withdraw successful"
+
+class CurrentAccount(Account):
+    def withdraw(self, amount):
+        return "Withdraw successful"
+```
+
+---
+
+## LSP perspective:
+
+```text
+SavingsAccount আর CurrentAccount — দুটোই Account-এর subtype
+
+কিন্তু যদি parent Account-এর মতো behave না করে,
+তাহলে client code break হতে পারে
+```
+
+---
+
+# ✅ LSP Follow করার Rule
+
+```text
+✅ child class parent-এর contract follow করবে
+✅ unexpected exception avoid করবে
+✅ input/output behavior consistent রাখবে
+✅ stronger precondition না দেবে
+✅ weaker postcondition না দেবে
+```
+
+---
+
+# ⚖️ LSP Violation Signs
+
+```text
+❌ child classে unsupported method রাখা
+❌ exception throw করা যা parent-এ expected ছিল না
+❌ behavior change করে ফেলা
+❌ client code বারবার type check করতে বাধ্য হওয়া
+```
+
+---
+
+# 🎯 Interview Line
+
+> *"LSP means that any subclass should be replaceable with its parent class without breaking the program. If a child class changes expected behavior or throws unexpected errors, then the design violates LSP."*
+
+---
+
+# 🚀 One-line memory trick
+
+> **"If it looks like a duck but cannot behave like a duck, LSP is broken."**
+
+---
+
+চাও হলে আমি এখন **LSP vs OCP vs SRP** comparison-ও same style-এ দিতে পারি।
