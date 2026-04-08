@@ -6466,3 +6466,596 @@ Security layers:
 - **Redis Caching — Cache strategies**
 
 কোনটা নিয়ে আগাবে?
+
+
+এই ১০টা topic একসাথে cover করছি — demo-র মতোই বাংলায়, diagram + code সহ। চলো শুরু করি!
+
+---
+
+## ১. Rate Limiting — Django-তে
+
+### 🔑 এক কথায়:
+> Rate Limiting মানে — **একজন user কতবার request করতে পারবে সেটা control করা।** Banking-এ fraud prevention-এর জন্য critical।
+
+```python
+# Method 1: django-ratelimit (সবচেয়ে popular)
+pip install django-ratelimit
+
+from django_ratelimit.decorators import ratelimit
+
+@ratelimit(key='ip', rate='5/m', method='POST', block=True)
+def login_view(request):
+    # ১ মিনিটে max ৫টা login attempt
+    pass
+
+# Method 2: DRF + throttling
+# settings.py
+REST_FRAMEWORK = {
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '10/minute',    # Anonymous user
+        'user': '100/minute',   # Authenticated user
+    }
+}
+
+# Custom throttle — banking example
+class TransactionThrottle(UserRateThrottle):
+    rate = '3/minute'  # ১ মিনিটে max ৩টা transaction
+
+class TransactionView(APIView):
+    throttle_classes = [TransactionThrottle]
+
+    def post(self, request):
+        # Transaction logic
+        pass
+```
+
+**Rate Limit exceeded হলে:**
+```
+HTTP 429 Too Many Requests
+Retry-After: 60
+```
+
+---
+
+## ২. Logging Strategy
+
+### 🔑 Banking-এ logging critical — audit trail দরকার
+
+```python
+# settings.py — Production logging config
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'json': {  # Structured logging — ELK stack-এ পাঠাতে
+            '()': 'pythonjsonlogger.jsonlogger.JsonFormatter',
+        },
+    },
+    'handlers': {
+        'file': {
+            'level': 'WARNING',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': '/var/log/app/django.log',
+            'maxBytes': 1024*1024*10,  # 10MB
+            'backupCount': 5,
+            'formatter': 'json',
+        },
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'audit': {  # ← Banking-এর জন্য আলাদা audit log
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': '/var/log/app/audit.log',
+            'formatter': 'json',
+        },
+    },
+    'loggers': {
+        'django': {'handlers': ['file', 'console'], 'level': 'WARNING'},
+        'myapp.audit': {'handlers': ['audit'], 'level': 'INFO', 'propagate': False},
+        'myapp.security': {'handlers': ['file'], 'level': 'ERROR'},
+    },
+}
+
+# Usage — views.py
+import logging
+
+audit_log = logging.getLogger('myapp.audit')
+security_log = logging.getLogger('myapp.security')
+
+def transfer_money(request):
+    audit_log.info('Money transfer initiated', extra={
+        'user_id': request.user.id,
+        'amount': request.data['amount'],
+        'from_account': request.data['from'],
+        'to_account': request.data['to'],
+        'ip': request.META.get('REMOTE_ADDR'),
+    })
+```
+
+**Log Levels:**
+```
+DEBUG    → Development-এ detail info
+INFO     → Normal operations (transactions, logins)
+WARNING  → Unexpected কিন্তু handle হচ্ছে (retry)
+ERROR    → Failed operation (payment failed)
+CRITICAL → System-level failure (DB down)
+```
+
+---
+
+## ৩. Caching কীভাবে করো
+
+### 🔑 এক কথায়:
+> Caching = **"এই result আগেও দিয়েছি, আবার calculate না করে store থেকে দাও"**
+
+```python
+# Django Cache Framework — 3 level
+# Level 1: Per-view cache
+from django.views.decorators.cache import cache_page
+
+@cache_page(60 * 15)  # 15 মিনিট cache
+def account_summary(request, account_id):
+    # DB query হবে না — cache থেকে দেবে
+    pass
+
+# Level 2: Template fragment cache
+# template.html
+{% load cache %}
+{% cache 500 account_info account_id %}
+    <!-- এই block ৫০০ সেকেন্ড cache থাকবে -->
+    <div>{{ account.balance }}</div>
+{% endcache %}
+
+# Level 3: Low-level cache API (সবচেয়ে flexible)
+from django.core.cache import cache
+
+def get_exchange_rate(currency):
+    cache_key = f'exchange_rate_{currency}'
+
+    # Cache-এ আছে?
+    rate = cache.get(cache_key)
+
+    if rate is None:  # Cache miss
+        rate = ExternalAPI.fetch_rate(currency)  # DB/API call
+        cache.set(cache_key, rate, timeout=300)  # ৫ মিনিট store
+
+    return rate  # Cache hit — fast!
+```
+
+---
+
+## ৪. Redis Caching
+
+### 🔑 Redis কেন? — In-memory, blazing fast, data structures support করে
+
+```python
+# Installation
+pip install django-redis redis
+
+# settings.py
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': 'redis://127.0.0.1:6379/1',
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'PARSER_CLASS': 'redis.connection.HiredisParser',
+            'CONNECTION_POOL_KWARGS': {'max_connections': 100},
+        },
+        'KEY_PREFIX': 'ucb',  # United Commercial Bank prefix
+        'TIMEOUT': 300,
+    }
+}
+
+# SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+
+# Redis-এর power — complex data structures
+import redis
+r = redis.Redis(host='localhost', port=6379, db=0)
+
+# String — simple value
+r.setex('user:1001:balance', 60, '50000.00')
+
+# Hash — object store
+r.hset('account:SB-001', mapping={
+    'balance': '50000',
+    'holder': 'Rahim',
+    'type': 'savings'
+})
+
+# Sorted Set — leaderboard, top transactions
+r.zadd('top_transactions', {'TXN-001': 150000, 'TXN-002': 75000})
+top = r.zrevrange('top_transactions', 0, 9)  # Top 10
+
+# Pub/Sub — real-time notification
+# Publisher
+r.publish('transaction_alerts', 'TXN-001 approved')
+
+# Subscriber (background worker)
+pubsub = r.pubsub()
+pubsub.subscribe('transaction_alerts')
+for message in pubsub.listen():
+    process_alert(message)
+```
+
+---
+
+## ৫. Cache Invalidation
+
+### 🔑 সবচেয়ে কঠিন problem — "When to clear cache?"
+
+> *"There are only two hard things in CS: cache invalidation and naming things."* — Phil Karlton
+
+```python
+# Strategy 1: TTL (Time-To-Live) — সহজ কিন্তু stale data হতে পারে
+cache.set('exchange_rate', rate, timeout=300)  # ৫ মিনিট পর expire
+
+# Strategy 2: Event-based invalidation — accurate
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=Account)
+def invalidate_account_cache(sender, instance, **kwargs):
+    cache_key = f'account_{instance.id}_balance'
+    cache.delete(cache_key)
+    # Related caches-ও clear করো
+    cache.delete(f'user_{instance.user_id}_accounts')
+
+# Strategy 3: Cache versioning — safest
+def get_account_balance(account_id):
+    version = cache.get(f'account_{account_id}_version', 1)
+    cache_key = f'balance_{account_id}_v{version}'
+
+    balance = cache.get(cache_key)
+    if balance is None:
+        balance = Account.objects.get(id=account_id).balance
+        cache.set(cache_key, balance, timeout=600)
+    return balance
+
+def update_account_balance(account_id, new_balance):
+    Account.objects.filter(id=account_id).update(balance=new_balance)
+    # Version bump করো — পুরোনো cache automatically invalid
+    cache.incr(f'account_{account_id}_version')
+
+# Strategy 4: Cache pattern — delete on write
+def transfer(from_id, to_id, amount):
+    with transaction.atomic():
+        Account.objects.filter(id=from_id).update(balance=F('balance') - amount)
+        Account.objects.filter(id=to_id).update(balance=F('balance') + amount)
+
+    # উভয় account-এর cache clear করো
+    cache.delete_many([
+        f'account_{from_id}_balance',
+        f'account_{to_id}_balance',
+    ])
+```
+
+---
+
+## ৬. CDN কী
+
+### 🔑 CDN = Content Delivery Network
+
+```
+User (Dhaka) → CDN Edge (Dhaka/Singapore) → Origin Server (US)
+
+Without CDN:
+  User → Origin Server (US) → 200ms latency 😫
+
+With CDN:
+  User → Nearest Edge Server → 20ms latency ✅
+  (Static files already cached at edge)
+```
+
+```python
+# Django + CDN (AWS CloudFront / Cloudflare)
+# settings.py
+
+# Static files CDN-এ
+STATIC_URL = 'https://cdn.example.com/static/'
+MEDIA_URL = 'https://cdn.example.com/media/'
+
+# AWS S3 + CloudFront — production setup
+AWS_STORAGE_BUCKET_NAME = 'ucb-assets'
+AWS_S3_CUSTOM_DOMAIN = 'cdn.ucb.com.bd'
+
+STORAGES = {
+    'staticfiles': {
+        'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
+    },
+    'default': {  # Media files
+        'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
+    },
+}
+```
+
+**CDN কী cache করে:**
+```
+✅ Static files  — CSS, JS, images (long TTL)
+✅ Media files   — User uploads
+✅ API responses — Public data (short TTL)
+❌ Dynamic data  — User-specific, authenticated content
+```
+
+---
+
+## ৭. Static vs Media File
+
+```python
+# Static Files — আপনার code-এর অংশ
+# CSS, JavaScript, images — deploy-এর সময় collect হয়
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'  # collectstatic এখানে রাখে
+STATICFILES_DIRS = [BASE_DIR / 'static']  # Development source
+
+# command:
+# python manage.py collectstatic
+
+# Media Files — User upload করে (runtime)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+# urls.py (development only — production-এ NGINX করে)
+from django.conf import settings
+from django.conf.urls.static import static
+
+urlpatterns = [
+    # ... your urls
+] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+# Model-এ media file
+class KYCDocument(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    nid_front = models.ImageField(upload_to='kyc/%Y/%m/')
+    nid_back  = models.ImageField(upload_to='kyc/%Y/%m/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+```
+
+**পার্থক্য:**
+```
+STATIC          │  MEDIA
+─────────────── │ ──────────────────
+Developer দেয়  │  User দেয়
+Deploy-এ fix    │  Runtime-এ change হয়
+Git-এ থাকে     │  Git-এ থাকে না
+CSS/JS/logo     │  Profile pic, docs
+NGINX serve     │  S3/NGINX serve
+```
+
+---
+
+## ৮. Custom Permission System (RBAC)
+
+### 🔑 RBAC = Role-Based Access Control
+
+```python
+# models.py
+class Role(models.Model):
+    name = models.CharField(max_length=50)  # 'teller', 'manager', 'admin'
+    permissions = models.ManyToManyField('Permission')
+
+class Permission(models.Model):
+    codename = models.CharField(max_length=100)  # 'can_approve_loan'
+    description = models.CharField(max_length=255)
+
+class UserRole(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    role = models.ForeignKey(Role, on_delete=models.CASCADE)
+    branch = models.ForeignKey('Branch', null=True)  # Branch-level access
+
+# Custom Backend
+class RBACBackend:
+    def has_perm(self, user, perm, obj=None):
+        if not user.is_active:
+            return False
+        user_roles = UserRole.objects.filter(user=user).select_related('role')
+        for user_role in user_roles:
+            if user_role.role.permissions.filter(codename=perm).exists():
+                return True
+        return False
+
+# settings.py
+AUTHENTICATION_BACKENDS = [
+    'myapp.backends.RBACBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
+# DRF Custom Permission
+class CanApproveLoan(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.has_perm('can_approve_loan')
+
+    def has_object_permission(self, request, view, obj):
+        # Manager শুধু নিজের branch-এর loan approve করতে পারবে
+        user_role = UserRole.objects.get(user=request.user)
+        return obj.branch == user_role.branch
+
+class LoanApprovalView(APIView):
+    permission_classes = [IsAuthenticated, CanApproveLoan]
+
+    def post(self, request, loan_id):
+        loan = get_object_or_404(Loan, id=loan_id)
+        self.check_object_permissions(request, loan)
+        loan.approve()
+        return Response({'status': 'approved'})
+
+# Template-এ use
+{% if request.user.has_perm 'can_approve_loan' %}
+    <button>Approve Loan</button>
+{% endif %}
+```
+
+---
+
+## ৯. Multi-tenant System
+
+### 🔑 Multi-tenant = একই app, আলাদা আলাদা client/organization
+
+**৩টা approach আছে:**
+
+```python
+# Approach 1: Shared DB, Tenant Column (সহজ)
+class Tenant(models.Model):
+    name = models.CharField(max_length=100)  # 'BRAC Bank', 'Dutch Bangla'
+    schema_name = models.CharField(max_length=50, unique=True)
+
+class Account(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE)
+    account_number = models.CharField(max_length=20)
+    balance = models.DecimalField(max_digits=15, decimal_places=2)
+
+    class Meta:
+        unique_together = ['tenant', 'account_number']
+
+# Middleware — request থেকে tenant বের করো
+class TenantMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        # subdomain থেকে tenant detect
+        host = request.get_host()  # 'brac.myapp.com'
+        subdomain = host.split('.')[0]  # 'brac'
+
+        try:
+            request.tenant = Tenant.objects.get(schema_name=subdomain)
+        except Tenant.DoesNotExist:
+            return HttpResponse('Tenant not found', status=404)
+
+        return self.get_response(request)
+
+# QuerySet — automatically tenant filter
+class TenantAwareManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(
+            tenant=get_current_tenant()  # Thread-local থেকে
+        )
+
+# Approach 2: Separate Schema (PostgreSQL) — django-tenant-schemas
+# প্রতিটা tenant-এর আলাদা schema
+# public schema → shared data
+# brac schema   → BRAC-এর data
+# dbbl schema   → Dutch Bangla-র data
+
+# Approach 3: Separate Database — সবচেয়ে isolated
+DATABASES = {
+    'brac': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'brac_db'},
+    'dbbl': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'dbbl_db'},
+}
+```
+
+---
+
+## ১০. SaaS Architecture
+
+### 🔑 সব কিছু একসাথে — Production-grade Banking SaaS```python
+# SaaS Architecture — Django settings structure
+![alt text](image-3.png)
+# config/settings/
+#   base.py      ← সব common settings
+#   development.py
+#   production.py
+#   staging.py
+
+# base.py
+INSTALLED_APPS = [
+    # Core
+    'django.contrib.auth',
+    'rest_framework',
+    # Multi-tenant
+    'django_tenants',
+    # Async
+    'django_celery_beat',
+    'django_celery_results',
+    # Monitoring
+    'django_prometheus',
+]
+
+# production.py
+from .base import *
+
+DEBUG = False
+ALLOWED_HOSTS = ['*.ucb.com.bd']
+
+# Database — Primary + Read Replica
+DATABASES = {
+    'default': {  # Write
+        'ENGINE': 'django.db.backends.postgresql',
+        'HOST': env('DB_PRIMARY_HOST'),
+    },
+    'replica': {  # Read
+        'ENGINE': 'django.db.backends.postgresql',
+        'HOST': env('DB_REPLICA_HOST'),
+        'TEST': {'MIRROR': 'default'},
+    },
+}
+
+# Database Router
+class PrimaryReplicaRouter:
+    def db_for_read(self, model, **hints):
+        return 'replica'   # Read → Replica
+
+    def db_for_write(self, model, **hints):
+        return 'default'   # Write → Primary
+
+    def allow_migrate(self, db, app_label, **hints):
+        return db == 'default'
+
+DATABASE_ROUTERS = ['config.routers.PrimaryReplicaRouter']
+
+# Celery — Async tasks
+CELERY_BROKER_URL = env('REDIS_URL')
+CELERY_RESULT_BACKEND = env('REDIS_URL')
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+# tasks.py
+from celery import shared_task
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_transaction_alert(self, txn_id, user_id):
+    try:
+        txn = Transaction.objects.get(id=txn_id)
+        user = User.objects.get(id=user_id)
+        send_sms(user.phone, f"TXN {txn_id}: ৳{txn.amount} debited")
+    except Exception as exc:
+        raise self.retry(exc=exc)  # Auto retry
+```
+
+---
+
+### 🎯 Interview Closing Summary:
+
+```
+Rate Limiting   → django-ratelimit / DRF throttle — fraud prevention
+Logging         → Structured JSON logging — audit trail for banking
+Caching         → 3 levels: view, fragment, low-level API
+Redis           → In-memory cache + Celery broker + pub/sub
+Cache Inval.    → TTL + Event-based + Versioning
+CDN             → CloudFront/Cloudflare — static/media fast delivery
+Static/Media    → collectstatic vs user upload — NGINX/S3 serve
+RBAC            → Role → Permission → User mapping
+Multi-tenant    → Shared DB (tenant col) / Separate Schema / DB
+SaaS Arch       → Nginx → Django → Services → PostgreSQL + Redis + S3
+```
+
+> *"Banking system-এ এই সব একসাথে কাজ করে — Redis cache দিয়ে balance fast দেখাই, Rate limit দিয়ে brute force ঠেকাই, RBAC দিয়ে teller/manager আলাদা করি, Celery দিয়ে async notification পাঠাই, আর multi-tenant architecture-এ একই platform-এ multiple banks চালাই।"*
+
+---
+
+পরের topics যেগুলো cover করতে পারি:
+- **Django ORM — select_related, prefetch_related, query optimization**
+- **JWT Authentication — refresh token rotation**
+- **WebSocket + Django Channels**
+- **Testing — pytest-django, mock, factory_boy**
+
+কোনটা নিয়ে আগাবে?
