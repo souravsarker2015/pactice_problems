@@ -579,3 +579,309 @@ FROM pg_indexes WHERE tablename = 'transactions';
 ### 🎯 Interview Closing line:
 
 > *"JOIN choice করি data requirement অনুযায়ী — transaction report-এ INNER JOIN কারণ শুধু valid data দরকার, account summary-তে LEFT JOIN কারণ transaction না থাকলেও account দেখাতে হবে, reconciliation-এ FULL OUTER JOIN কারণ দুটো system-এর mismatch খুঁজতে হবে। Index-এ সবার আগে EXPLAIN ANALYZE দেখি — Seq Scan দেখলে index দিই, কিন্তু write-heavy table-এ সতর্ক থাকি কারণ প্রতিটা write-এ index maintain করতে হয়। Composite index-এ column order সবচেয়ে গুরুত্বপূর্ণ — most selective column আগে।"*
+
+## Clustered vs Non-clustered Index & Normalization Forms
+
+---
+
+## ১. Clustered vs Non-clustered Index
+
+---### 💻 Clustered Index:
+
+```sql
+-- Primary Key → automatically Clustered Index (PostgreSQL-এ CLUSTER command দরকার)
+CREATE TABLE accounts (
+    account_id VARCHAR(20) PRIMARY KEY,  -- Clustered (default)
+    name VARCHAR(100),
+    balance DECIMAL(15,2)
+);
+
+-- Data physically account_id order-এ store হয়:
+-- SB-001, SB-002, SB-003... (disk-এ এই order-এই)
+
+-- Range query → খুব দ্রুত (physically consecutive)
+SELECT * FROM accounts
+WHERE account_id BETWEEN 'SB-001' AND 'SB-100';
+-- Disk-এ পাশাপাশি থাকে → একটা read-এ অনেক data ✅
+
+-- PostgreSQL-এ manually cluster করো
+CLUSTER accounts USING accounts_pkey;
+-- Data physically reorder হলো
+
+-- Problem: Insert করলে reorder দরকার হতে পারে
+-- SB-050 insert করলে মাঝখানে জায়গা করতে হবে
+```
+
+### 💻 Non-clustered Index:
+
+```sql
+-- আলাদা B-tree structure — data move হয় না
+CREATE INDEX idx_balance ON accounts(balance);
+-- Index: sorted by balance → pointer to actual row
+
+-- Multiple non-clustered index allowed
+CREATE INDEX idx_name    ON accounts(name);
+CREATE INDEX idx_branch  ON accounts(branch_id);
+CREATE INDEX idx_balance ON accounts(balance);
+-- সবগুলো আলাদা structure, heap-এ point করে
+
+-- Extra lookup দরকার হয়:
+-- Index → row pointer → heap → actual data (2 steps)
+-- Clustered: Index = data (1 step) ✅
+
+-- Covering index দিয়ে heap lookup এড়ানো যায়
+CREATE INDEX idx_covering
+ON accounts(branch_id)
+INCLUDE (name, balance);  -- এই query-তে heap যেতেই হবে না
+SELECT name, balance FROM accounts WHERE branch_id = 1;
+```
+
+### 📊 পার্থক্য:
+
+| | Clustered | Non-clustered |
+|---|---|---|
+| Data storage | Index-এই data | আলাদা heap-এ |
+| Per table | ১টা মাত্র | অনেকগুলো |
+| Range query | ✅ খুব দ্রুত | মাঝারি |
+| Lookup steps | ১টা | ২টা (index + heap) |
+| Insert cost | বেশি (reorder) | কম |
+| Banking use | `account_id` PK | `balance`, `name`, `branch_id` |
+
+---
+
+## ২. Normalization — 1NF থেকে BCNFBanking-এ একটা খারাপ table ধরে ধাপে ধাপে normalize করা যাক।
+
+![alt text](image-6.png)
+
+---
+
+### শুরু — Unnormalized Table:
+
+```
+account_transactions (খুব খারাপ design):
+
+account_id | account_name | branch_id | branch_city | phones          | txn1_amt | txn2_amt
+SB-001     | Sourov       | B1        | Dhaka       | 01711, 01811    | 500      | 1000
+SB-002     | Karim        | B1        | Dhaka       | 01911           | 250      | NULL
+SB-003     | Rina         | B2        | Chittagong  | 01611, 01711    | 750      | 500
+
+সমস্যা:
+- phones column-এ multiple values (01711, 01811)
+- txn1_amt, txn2_amt repeating groups
+- branch_city depends on branch_id, not account_id
+```
+
+---
+
+### 1NF — Atomic Values, No Repeating Groups:
+
+**Rule: প্রতিটা cell-এ একটাই value, কোনো repeating group নেই।**
+
+```sql
+-- ❌ 1NF violate
+account_id | phones
+SB-001     | "01711, 01811"    -- multiple values!
+SB-001     | txn1=500, txn2=1000  -- repeating columns!
+
+-- ✅ 1NF fix — atomic করো
+-- Phone আলাদা table-এ
+CREATE TABLE account_phones (
+    account_id VARCHAR(20),
+    phone      VARCHAR(15),
+    PRIMARY KEY (account_id, phone)
+);
+-- SB-001 | 01711
+-- SB-001 | 01811  ← আলাদা row ✅
+
+-- Transaction আলাদা table-এ
+CREATE TABLE transactions (
+    txn_id     BIGSERIAL PRIMARY KEY,
+    account_id VARCHAR(20),
+    amount     DECIMAL(15,2)
+);
+-- txn1, txn2 column এর বদলে আলাদা rows ✅
+
+-- 1NF result:
+accounts (account_id, account_name, branch_id, branch_city)
+account_phones (account_id, phone)
+transactions (txn_id, account_id, amount)
+```
+
+---
+
+### 2NF — No Partial Dependency:
+
+**Rule: Composite key থাকলে non-key column সম্পূর্ণ key-এর উপর depend করতে হবে — শুধু একটা অংশের উপর না।**
+
+```sql
+-- ❌ 2NF violate (composite key: account_id + product_id)
+account_products:
+account_id | product_id | account_name | product_name | signup_date
+SB-001     | LOAN       | Sourov       | Home Loan    | 2024-01-01
+SB-001     | FD         | Sourov       | Fixed Dep.   | 2024-02-01
+SB-002     | LOAN       | Karim        | Home Loan    | 2024-01-15
+
+-- সমস্যা:
+-- account_name depends only on account_id (partial dependency!) 😱
+-- product_name depends only on product_id (partial dependency!) 😱
+-- signup_date depends on BOTH → OK ✅
+
+-- ✅ 2NF fix — আলাদা table-এ নাও
+CREATE TABLE accounts (
+    account_id   VARCHAR(20) PRIMARY KEY,
+    account_name VARCHAR(100)   -- শুধু account_id-এর উপর depend ✅
+);
+
+CREATE TABLE products (
+    product_id   VARCHAR(10) PRIMARY KEY,
+    product_name VARCHAR(100)   -- শুধু product_id-এর উপর depend ✅
+);
+
+CREATE TABLE account_products (
+    account_id  VARCHAR(20) REFERENCES accounts(account_id),
+    product_id  VARCHAR(10) REFERENCES products(product_id),
+    signup_date DATE,           -- composite key-এর উপর depend ✅
+    PRIMARY KEY (account_id, product_id)
+);
+```
+
+---
+
+### 3NF — No Transitive Dependency:
+
+**Rule: Non-key column অন্য non-key column-এর উপর depend করতে পারবে না।**
+
+```sql
+-- ❌ 3NF violate
+accounts:
+account_id | account_name | branch_id | branch_name | branch_city
+SB-001     | Sourov       | B1        | Gulshan     | Dhaka
+SB-002     | Karim        | B1        | Gulshan     | Dhaka  ← duplicate!
+SB-003     | Rina         | B2        | Banani      | Dhaka  ← duplicate!
+
+-- সমস্যা (Transitive Dependency):
+-- account_id → branch_id ✅
+-- branch_id  → branch_name, branch_city 😱
+-- তাই: account_id → branch_name (transitively) ← 3NF violate!
+
+-- Update anomaly:
+-- Gulshan branch-এর city change হলে
+-- SB-001 আর SB-002 দুটো row update করতে হবে 😱
+
+-- ✅ 3NF fix — branch আলাদা table-এ
+CREATE TABLE branches (
+    branch_id   VARCHAR(10) PRIMARY KEY,
+    branch_name VARCHAR(100),   -- branch_id-এর উপর directly depend ✅
+    branch_city VARCHAR(50)     -- branch_id-এর উপর directly depend ✅
+);
+
+CREATE TABLE accounts (
+    account_id   VARCHAR(20) PRIMARY KEY,
+    account_name VARCHAR(100),
+    branch_id    VARCHAR(10) REFERENCES branches(branch_id)
+    -- branch_name, branch_city সরিয়ে দিলাম ✅
+);
+
+-- এখন branch city update হলে শুধু branches table-এ একবার change ✅
+```
+
+---
+
+### BCNF — Boyce-Codd Normal Form (3NF-এর stronger version):
+
+**Rule: প্রতিটা functional dependency-তে বাম পাশ অবশ্যই superkey হতে হবে।**
+
+```sql
+-- ❌ BCNF violate (3NF-এ আছে কিন্তু BCNF-এ নেই)
+-- Scenario: একজন teller শুধু একটা branch-এ কাজ করে
+--           একটা account শুধু একটা branch-এ থাকে
+
+account_teller:
+account_id | teller_id | branch_id
+SB-001     | T01       | B1
+SB-001     | T02       | B1        ← SB-001 একই branch-এ দুজন teller
+SB-002     | T01       | B1
+
+-- Functional Dependencies:
+-- (account_id, teller_id) → branch_id  ← composite key → branch
+-- teller_id → branch_id               ← teller থেকে branch! 😱
+--                                         teller_id superkey না
+
+-- ✅ BCNF fix
+CREATE TABLE teller_branch (
+    teller_id  VARCHAR(10) PRIMARY KEY,
+    branch_id  VARCHAR(10) REFERENCES branches(branch_id)
+    -- teller_id → branch_id (teller_id is superkey here) ✅
+);
+
+CREATE TABLE account_teller (
+    account_id VARCHAR(20),
+    teller_id  VARCHAR(10) REFERENCES teller_branch(teller_id),
+    PRIMARY KEY (account_id, teller_id)
+    -- branch_id সরিয়ে দিলাম ✅
+);
+```
+
+---
+
+### 💻 Final Normalized Banking Schema:
+
+```sql
+-- সব normalization apply করার পরে:
+
+CREATE TABLE branches (
+    branch_id   VARCHAR(10) PRIMARY KEY,
+    branch_name VARCHAR(100) NOT NULL,
+    city        VARCHAR(50)  NOT NULL
+);
+
+CREATE TABLE accounts (
+    account_id   VARCHAR(20) PRIMARY KEY,
+    account_name VARCHAR(100) NOT NULL,
+    branch_id    VARCHAR(10) REFERENCES branches(branch_id),
+    balance      DECIMAL(15,2) DEFAULT 0
+);
+
+CREATE TABLE account_phones (
+    account_id VARCHAR(20) REFERENCES accounts(account_id),
+    phone      VARCHAR(15) NOT NULL,
+    PRIMARY KEY (account_id, phone)
+);
+
+CREATE TABLE products (
+    product_id   VARCHAR(10) PRIMARY KEY,
+    product_name VARCHAR(100)
+);
+
+CREATE TABLE account_products (
+    account_id  VARCHAR(20) REFERENCES accounts(account_id),
+    product_id  VARCHAR(10) REFERENCES products(product_id),
+    signup_date DATE,
+    PRIMARY KEY (account_id, product_id)
+);
+
+CREATE TABLE transactions (
+    txn_id     BIGSERIAL PRIMARY KEY,
+    account_id VARCHAR(20) REFERENCES accounts(account_id),
+    amount     DECIMAL(15,2) NOT NULL,
+    txn_type   CHAR(2),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+---
+
+### 📊 Normalization Summary:
+
+| Form | Rule | Fix করে | Banking Example |
+|---|---|---|---|
+| **1NF** | Atomic values, no repeating | Multi-value cells | phones → আলাদা table |
+| **2NF** | No partial dependency | Composite key-এ partial | product_name → products table |
+| **3NF** | No transitive dependency | Non-key → non-key | branch_city → branches table |
+| **BCNF** | Every determinant = superkey | 3NF-এ missed cases | teller → branch আলাদা |
+
+---
+
+### 🎯 Interview Closing line:
+
+> *"Clustered index মানে data physically sorted হয়ে store হয় — banking-এ account_id-এর Primary Key automatically clustered, তাই range query অনেক দ্রুত। Non-clustered index আলাদা structure — pointer দিয়ে heap-এ যায়, একটা table-এ অনেকগুলো থাকতে পারে balance বা name search-এর জন্য। Normalization-এ 1NF atomic করে, 2NF partial dependency সরায়, 3NF transitive dependency সরায়, BCNF আরো strict। Banking schema-তে branch city, product name — এগুলো আলাদা table-এ না রাখলে একটা city update-এ হাজারটা row change করতে হতো।"*
